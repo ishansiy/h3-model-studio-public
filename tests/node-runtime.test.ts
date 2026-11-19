@@ -1,6 +1,7 @@
 import {createIntegrationKey,authenticateIntegration} from '../lib/integration-api';
 import {persistVerifiedAccount} from '../lib/account-persistence';
-import {publicUrl,publicRequest} from '../lib/public-url';
+import {publicUrl,publicRequest,samePublicOrigin} from '../lib/public-url';
+import {handleAccessRequest,passwordVerifier} from '../lib/access';
 import assert from 'node:assert/strict';
 import {mkdtempSync,readFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -14,6 +15,32 @@ import {NodeDatabase,NodeBucket,postgresSql,validateEnvironment} from '../lib/no
 import {enqueue,workerPoll,cancelQueuedJob,getSession,workerHeartbeat,finishQueueJob} from '../lib/session-queue';
 import {frameCount} from '../lib/parameters';
 assert.equal(publicUrl(new Request('http://0.0.0.0:3000/api/access',{headers:{host:'localhost:8791'}})).origin,'http://localhost:8791');process.env.PUBLIC_BASE_URL='https://studio.example.com';assert.equal(publicRequest(new Request('http://0.0.0.0:3000/api/access')).url,'https://studio.example.com/api/access');delete process.env.PUBLIC_BASE_URL;
+const renderOrigin = 'https://studio-test.onrender.com';
+const domainOrigin = 'https://studio.example.com';
+process.env.RENDER_EXTERNAL_URL = renderOrigin;
+process.env.PUBLIC_ACCESS_ORIGINS = domainOrigin;
+const browserRequest = (host: string, origin: string) => new Request('http://0.0.0.0:3000/api/access', {
+ method:'POST', headers: {host, origin, 'content-type':'application/json'},
+ body:JSON.stringify({password:'local-origin-test'}),
+});
+const accessConfig = {verifier:await passwordVerifier('local-origin-test'),sessionSecret:'a'.repeat(64)};
+const login = (request: Request) => handleAccessRequest(publicRequest(request),accessConfig,async()=>({attempts:1,expires:Date.now()+60_000}));
+const domainRequest = browserRequest('studio.example.com',domainOrigin);
+assert.ok(samePublicOrigin(domainRequest));
+assert.equal(publicUrl(domainRequest).origin,renderOrigin);
+assert.equal(publicRequest(domainRequest).url,domainOrigin+'/api/access');
+for(const [host, origin] of [['studio.example.com',domainOrigin],['studio-test.onrender.com',renderOrigin]]){
+ const result=await login(browserRequest(host,origin));
+ assert.equal(result.status,200);
+ assert.match(result.headers.get('set-cookie')??'',/; Secure/);
+}
+assert.equal((await login(browserRequest('studio-test.onrender.com',domainOrigin))).status,403);
+assert.equal((await login(browserRequest('studio.example.com',renderOrigin))).status,403);
+const unexpectedHost = browserRequest('unknown.example.com',domainOrigin);
+unexpectedHost.headers.set('x-forwarded-host','studio.example.com');
+assert.equal((await login(unexpectedHost)).status,403);
+delete process.env.PUBLIC_ACCESS_ORIGINS;
+delete process.env.RENDER_EXTERNAL_URL;
 const dir=mkdtempSync(join(tmpdir(),'h3-storage-'));
 function pglitePool(pg:PGlite) {
  const query=async(input:string|QueryConfig,values?:unknown[])=>{

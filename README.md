@@ -20,7 +20,7 @@
 
 **数据持久化**。账户凭证、任务、队列、专用 API 密钥和作品文件都存入 PostgreSQL。视频和图片字节存放在 `h3_objects` 表，跟随数据库备份。Render 重新部署或重启 Web 服务时，继续使用同一数据库和主密钥即可保留数据。免费 Render Postgres 的有效期为 30 天、容量上限为 1 GB。长期使用请选持久数据库方案。 [Render 免费服务限制](https://render.com/docs/free) · [Render Postgres 备份](https://render.com/docs/postgresql-backups)
 
-免费 Web 服务空闲约 15 分钟后休眠，冷启动会延迟浏览和回调。Kaggle 计算额度与 Render 服务计划分别管理。自定义域名可用 `PUBLIC_BASE_URL`，默认使用 Render 提供的 `RENDER_EXTERNAL_URL` 作为队列回调地址。
+免费 Web 服务空闲约 15 分钟后休眠，冷启动会延迟浏览和回调。Kaggle 计算额度与 Render 服务计划分别管理。为 Render 绑定自定义域名后，将完整的 HTTPS 来源填入 `PUBLIC_ACCESS_ORIGINS`。多个来源用英文逗号分隔。浏览器请求仍须来自当前访问的域名。队列回调默认使用 Render 提供的 `RENDER_EXTERNAL_URL`，如需改用固定地址可设置 `PUBLIC_BASE_URL`。
 
 ### 迁移现有 SQLite 数据到 Render
 

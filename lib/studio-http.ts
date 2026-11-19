@@ -1,5 +1,5 @@
 import {MODEL_CATALOG,CATEGORIES} from './model-catalog';
-import {publicUrl} from './public-url';
+import {publicUrl,samePublicOrigin} from './public-url';
 import {accountProxyRoute} from './account-proxy';
 import {enqueue,getSession,sessionView,stopGpuSession,cancelQueuedJob,QueueError} from "./session-queue";
 import {launchSession,syncGpuSession,queueVideoResponse} from "./gpu-session-service";
@@ -71,8 +71,7 @@ export async function studioRoute(request: Request, context: { params: Promise<{
   if(request.method==="GET" && path.length===3 && path[0]==="jobs" && path[2]==="control") return readControl(request,db(),path[1]);
   if(!(await hasAccessSession(accessCookieFromRequest(request),siteAccessConfig())))return fail("请先输入站点访问密码。",401);
   let owner:string;try{owner=getWorkspaceOwner();}catch{return fail("单人工作室尚未配置，请联系站点主人。",503);}
-  const url=publicUrl(request);
-  if (request.method !== "GET" && request.headers.get("Origin") && request.headers.get("Origin") !== url.origin) return fail("请求来源不匹配。",403);
+  if (request.method !== "GET" && request.headers.has("Origin") && !samePublicOrigin(request)) return fail("请求来源不匹配。",403);
   return dispatchStudio(request,path,owner);
 }
 export async function dispatchStudio(request:Request,path:string[],owner:string){
@@ -81,7 +80,7 @@ export async function dispatchStudio(request:Request,path:string[],owner:string)
     if(path[0]==="models"&&path.length===1&&request.method==="GET")return json({categories:CATEGORIES,models:MODEL_CATALOG});
     if(path[0]==="integration-keys"){
       if(request.method==="GET"&&path.length===1)return json({keys:await listIntegrationKeys(db(),owner)});
-      if(request.headers.get("Origin")!==url.origin)return fail("请求来源不匹配。",403);
+      if(!samePublicOrigin(request))return fail("请求来源不匹配。",403);
       if(request.method==="POST"&&path.length===1){
         const value=await readSmallJson(request);
         if(typeof value?.name!=="string"||value.name.length>40)return fail("密钥名称最多 40 个字符。");
