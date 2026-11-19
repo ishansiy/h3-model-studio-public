@@ -1,0 +1,14 @@
+CREATE TABLE IF NOT EXISTS "accounts" ("id" TEXT PRIMARY KEY NOT NULL,"owner" TEXT NOT NULL,"name" TEXT NOT NULL,"username" TEXT NOT NULL,"cipher" TEXT NOT NULL,"hint" TEXT NOT NULL,"created_at" BIGINT NOT NULL,"deleted_at" BIGINT);
+CREATE UNIQUE INDEX IF NOT EXISTS "account_owner_username" ON "accounts" ("owner","username");
+CREATE TABLE IF NOT EXISTS "gpu_sessions" ("id" TEXT PRIMARY KEY NOT NULL,"owner" TEXT NOT NULL,"account_id" TEXT NOT NULL,"username" TEXT NOT NULL,"status" TEXT NOT NULL,"profile" TEXT NOT NULL,"token_hash" TEXT NOT NULL,"worker_id" TEXT,"kernel_ref" TEXT NOT NULL,"version" BIGINT,"kernel_session_id" BIGINT,"created_at" BIGINT NOT NULL,"expires_at" BIGINT NOT NULL,"heartbeat_at" BIGINT NOT NULL DEFAULT 0,"idle_since" BIGINT,"stop_requested_at" BIGINT,"last_error" TEXT,"sync_lease" BIGINT NOT NULL DEFAULT 0);
+CREATE UNIQUE INDEX IF NOT EXISTS "one_live_gpu_session" ON "gpu_sessions" ("account_id") WHERE "gpu_sessions"."status" NOT IN ('completed','failed');
+CREATE INDEX IF NOT EXISTS "sessions_owner_date" ON "gpu_sessions" ("owner","created_at");
+CREATE TABLE IF NOT EXISTS "integration_keys" ("id" TEXT PRIMARY KEY NOT NULL,"owner" TEXT NOT NULL,"name" TEXT NOT NULL,"hash" TEXT NOT NULL,"hint" TEXT NOT NULL,"created_at" BIGINT NOT NULL,"expires_at" BIGINT NOT NULL,"revoked_at" BIGINT,"last_used_at" BIGINT,"scopes" TEXT NOT NULL DEFAULT 'accounts:read accounts:write',"rate_window" BIGINT NOT NULL DEFAULT 0,"rate_count" BIGINT NOT NULL DEFAULT 0);
+CREATE UNIQUE INDEX IF NOT EXISTS "integration_key_hash" ON "integration_keys" ("hash");
+CREATE INDEX IF NOT EXISTS "integration_key_owner" ON "integration_keys" ("owner");
+CREATE TABLE IF NOT EXISTS "jobs" ("id" TEXT PRIMARY KEY NOT NULL,"owner" TEXT NOT NULL,"account_id" TEXT NOT NULL,"account_name" TEXT NOT NULL,"username" TEXT NOT NULL,"params" TEXT NOT NULL,"status" TEXT NOT NULL,"kernel_ref" TEXT NOT NULL,"session_id" TEXT,"claim_token" TEXT,"artifact_key" TEXT,"artifact_sha" TEXT,"artifact_bytes" BIGINT,"version" BIGINT,"kernel_session_id" BIGINT,"control_hash" TEXT,"stop_requested_at" BIGINT,"created_at" BIGINT NOT NULL,"updated_at" BIGINT NOT NULL,"stage" TEXT NOT NULL,"step" BIGINT NOT NULL DEFAULT 0,"total_steps" BIGINT NOT NULL,"error" TEXT,"metadata" TEXT,"sync_lease" BIGINT NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS "jobs_owner_date" ON "jobs" ("owner","created_at");
+CREATE UNIQUE INDEX IF NOT EXISTS "one_active_job_per_account" ON "jobs" ("account_id") WHERE "jobs"."status" IN ('submitting','queued','running','submission_unknown') AND "jobs"."session_id" IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS "one_running_job_per_session" ON "jobs" ("session_id") WHERE "jobs"."status"='running' AND "jobs"."session_id" IS NOT NULL;
+CREATE TABLE IF NOT EXISTS "settings" ("id" TEXT PRIMARY KEY NOT NULL,"value" TEXT NOT NULL);
+

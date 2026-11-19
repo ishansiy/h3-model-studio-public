@@ -1,0 +1,46 @@
+{
+  "name": "model-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "dev": "next dev --webpack --hostname 0.0.0.0",
+    "build": "next build --webpack",
+    "start": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/start.ts",
+    "check": "tsc --noEmit",
+    "test": "tsx tests/session-stop.test.ts && tsx tests/generation-api.test.ts && tsx tests/hyperflow.test.ts && tsx tests/hyperflow-mixed.test.ts && tsx tests/hyperflow-resident.test.ts && tsx tests/hyperflow-head-parallel.test.ts && tsx tests/h3-mixed.test.ts && tsx tests/h3-mixed-queue.test.ts && tsx tests/session-notebook.test.ts && tsx tests/models.test.ts && tsx tests/node-runtime.test.ts && tsx tests/proxy.test.ts && tsx tests/proxy-settings.test.ts && tsx tests/access.test.ts && tsx tests/accounts.test.ts && tsx tests/site-options.test.ts && tsx tests/import-sites.test.ts",
+    "migrate:sites": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/import-sites.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/migrate-postgres.ts",
+    "db:import-sqlite": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/import-sqlite.ts"
+  },
+  "dependencies": {
+    "drizzle-orm": "0.45.4",
+    "lucide-react": "^1.31.0",
+    "next": "16.4.6",
+    "pg": "^8.16.3",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "sharp": "0.35.5",
+    "tsx": "^4.20.6",
+    "undici": "^7.23.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "4.20260515.1",
+    "@electric-sql/pglite": "^0.3.14",
+    "@types/node": "^24.10.0",
+    "@types/pg": "^8.15.6",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "drizzle-kit": "0.31.11",
+    "typescript": "5.9.3"
+  },
+  "overrides": {
+    "@esbuild-kit/core-utils": {
+      "esbuild": "0.28.2"
+    }
+  }
+}

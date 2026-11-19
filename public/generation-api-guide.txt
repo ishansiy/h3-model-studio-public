@@ -1,0 +1,82 @@
+影像工作室 · 对外 API v1
+
+服务根地址：当前工作室网址。例如 https://your-app.onrender.com
+OpenAPI：/api/v1/openapi.json
+Python 示例：/studio-api-client.py
+
+一、鉴权
+在“计算账户 → 脚本接入 API”创建密钥，按需勾选：
+models:read 模型目录；jobs:read 任务、结果、远端核对；jobs:write 创建/取消；
+accounts:read 账户列表；accounts:write 接入或更新账户。
+旧密钥仍只有 accounts:read accounts:write，不会自动获得生成权限。
+每个密钥每分钟最多20次，有效期90天，最多5个有效密钥。
+所有请求带 Authorization: Bearer <工作室密钥>，不是 Kaggle Token 或站点密码。
+不得把密钥放在 URL 中。调用 API 无需浏览器 cookie。API 不返回已保存的 Kaggle Token。
+这是服务端接入 API；不对任意第三方网页开放跨域访问。
+
+二、接口
+GET  /api/v1/models                         返回模型目录、尺寸、默认参数
+GET  /api/v1/accounts                       返回账户列表，取 id 作为 accountId
+POST /api/v1/accounts                       接入或更新账户，沿用原账户 API
+POST /api/v1/jobs                           创建任务，首次202、重复200
+GET  /api/v1/jobs?limit=20&cursor=<UUID>      按时间倒序分页；末页 nextCursor=null
+GET  /api/v1/jobs/<id>                       已记录的进度、参数、种子、错误和元数据
+POST /api/v1/jobs/<id>/sync                  远端状态核对（心跳中断时使用）
+POST /api/v1/jobs/<id>/cancel                请求取消，收到202不代表已停止
+GET  /api/v1/jobs/<id>/artifact              读取PNG或MP4；支持Range
+GET  /api/v1/jobs/<id>/artifact?download=1   下载作品，同样需要Bearer认证
+
+三、创建任务
+Content-Type: application/json；最大32KiB。
+requestId 为小写 UUID（由客户端生成），accountId 为已有账户 UUID。
+同一次业务请求重试必须沿用 requestId，不要每次换 ID。
+相同 ID 相同参数返回原任务；不同参数/账户返回409，不重复生成。
+seed 可省略：服务端随机生成并保存；重试省略时沿用原种子。
+64位大种子用字符串，避免JSON数字丢精度。
+除 requestId/accountId/category/modelId/prompt/mode/width/height/duration/steps/seed/runtimeProfile
+以外的字段会拒绝，不会悄悄忽略参考图等未接入能力。
+
+视频例子（请替换两个 UUID）：
+{"requestId":"客户端小写UUID","accountId":"已有账户UUID","modelId":"hyperflow-h3-flash","prompt":"海边，一只小猫望向夕阳","width":1024,"height":768,"duration":5,"steps":6}
+
+图像例子：
+{"requestId":"客户端小写UUID","accountId":"已有账户UUID","category":"image","modelId":"z-image-turbo","prompt":"阳光下的白色小猫","width":1024,"height":1024,"steps":9}
+
+支持的模型与限制：
+- h3：视频默认模型，quality默认20步、最高50步；turbo仅4/8步。
+  网站尺寸最高1024×768，此尺寸最多4.46秒/107帧；其他尺寸4–15秒。
+  runtimeProfile=standard/fp16/ck，fp16仅quality。
+- hyperflow-h3-flash：默认6步，支持4/6/8步、5–15秒；runtimeProfile=standard。
+  1024×768、5秒实际对齐为124帧约5.17秒；内置已验证的加速路径。
+- z-image-turbo：默认图像模型，9调度步；runtimeProfile=standard。
+  不接受duration/mode。图像描述最长3000字符，视频最长6000字符。
+模型、尺寸、默认值以 GET /models 与服务器验证为准；未填写采用模型默认值。
+H3省略时长时，最高分辨率自动采用该档默认上限4.46秒；显式超界会拒绝，不降低参数。
+
+四、队列和状态
+返回 {job:{id,status,stage,step,totalSteps,params,...},replayed:false}，Location 指向查询地址。
+queued/running 表示排队/执行；completed 表示作品已交付到工作室；failed/cancelled 为终态。
+建议每5–10秒查询GET状态，收到429按Retry-After等待；不要把每次轮询都变成sync。
+网络超时后先按原 requestId 查询或用相同 ID 重试，不能盲目创建新任务。
+同账户、同模型、同运行方案自动复用GPU会话，每个会话最多20个待执行任务。
+切换模型/方案时若会话仍忙返回409；空闲会话5分钟后退出。
+取消只作用于指定任务；运行中等待实际停止确认，不代表已关闭整个GPU会话。
+completed不等于人工画质验收；外部调用方应下载并检查实际作品。
+下载前应确认本地文件不存在，避免覆盖自己的作品。
+
+五、错误
+JSON统一 {error:"中文说明",code:"机器错误码"}，生成接口带X-Request-Id便于排查。
+400 invalid_parameters/invalid_request/invalid_pagination：参数或分页错误
+401 invalid_api_key：密钥缺失、过期或撤销
+403 insufficient_scope：缺少所需权限
+404 not_found：任务或接口不存在
+405 method_not_allowed：请求方法错误（Allow头列出支持方法）
+409 idempotency_conflict/conflict：requestId参数冲突、队列忙或模型方案冲突
+410 artifact_gone：历史作品源不可用
+413 body_too_large；415 invalid_content_type
+429 rate_limited：按Retry-After重试
+500 internal_error：临时错误，用X-Request-Id联系管理员，创建任务重试沿用原requestId
+
+六、兼容
+原有 /api/v1/accounts 和账户接入脚本继续可用。
+新增生成权限不会授权删除账户、修改代理、读取凭证或管理其他人的工作空间。

@@ -1,0 +1,37 @@
+H3 工作室账户接入 API
+
+用途：把已有 Kaggle 账户添加到你的工作空间。接口不注册 Kaggle 账号，不代替 Kaggle 的账号验证或 GPU 权限申请。
+
+1. 在工作室输入访问密码。
+2. 展开账户列表下方的“脚本接入 API”，创建 API 密钥并保存。密钥只显示一次，可随时撤销，有效期 90 天。
+3. 下载 connect-kaggle-account.py，运行：
+   python3 connect-kaggle-account.py --name "创作账户"
+   按提示输入工作室 API 密钥和 Kaggle API Token，输入不显示。
+   自动化环境可通过 H3_STUDIO_API_KEY 与 KAGGLE_API_TOKEN 提供。请使用密钥管理器，不把真实密钥写入源码、命令参数或日志。
+
+基础地址：https://your-app.onrender.com
+认证：Authorization: Bearer H3AK_…
+
+POST /api/v1/accounts
+Content-Type: application/json
+请求体：{"name":"创作账户","token":"KGAT_…"}
+name 可省略，最长 40 字符；token 必填。
+username 可选，用于确认 Token 属于预期用户名，填写错误会拒绝。
+用户名由 Kaggle 自动识别，不需要已有 Notebook。
+同一用户名重复提交更新名称和 Token，保留原账户 id、生成记录与进行中的任务。
+已移除账户可以重新连接，仍受 20 个有效账户的限制。
+成功 HTTP 200：{"account":{"id":"…","name":"…","username":"…","hint":"密钥末4位","created_at":0}}
+
+GET /api/v1/accounts
+成功 HTTP 200：{"accounts":[…]}。仅返回密钥所属工作空间的账户，不返回 Token 或加密密文。
+
+权限与限制：仅支持读取账户列表、添加/更新账户；不能生成视频、读取任务、删除账户、取回保存的密钥。每个密钥每分钟最多 20 次请求，每个工作空间最多连接 20 个账户、保留 5 个有效 API 密钥。
+脚本用专用 API 密钥认证，无需浏览器 cookie、ChatGPT 登录状态或站点访问密码。创建/撤销 API 密钥仍需先输入工作室访问密码。
+
+错误响应：{"error":"中文说明","code":"错误码"}
+401 invalid_api_key：缺少密钥、密钥无效、已撤销或到期。
+429 rate_limited：超过每分钟请求限制，按 Retry-After 响应头等待。
+400 invalid_account / invalid_json / account_verification_failed：参数错误、Kaggle Token 失效、用户名不匹配、账户数量超限或验证暂时失败。
+413 body_too_large：请求体超过 8 KiB。
+415 invalid_content_type：需要 application/json。
+405 method_not_allowed：仅支持 GET/POST。
