@@ -1,6 +1,6 @@
 "use client";
 import {useEffect,useState} from "react";
-import {KeyRound,Plus,Copy,Trash2,LoaderCircle,ArrowDownToLine} from "lucide-react";
+import {KeyRound,Plus,Copy,Trash2,LoaderCircle,BookOpen} from "lucide-react";
 type Key={scope:string;id:string;name:string;hint:string;expiresAt:number;lastUsedAt:number|null};
 async function api(path:string,init?:RequestInit){const r=await fetch(`/api/${path}`,{...init,headers:{"Content-Type":"application/json",...init?.headers}});const data=await r.json() as any;if(!r.ok)throw new Error(data.error||"请求失败。");return data;}
 const date=(value:number)=>new Intl.DateTimeFormat("zh-CN",{timeZone:"Asia/Shanghai",dateStyle:"short",timeStyle:"short",hour12:false}).format(value);
@@ -20,6 +20,6 @@ export default function IntegrationPanel(){
     {error&&<p className="inline-error" role="alert">{error}</p>}
     <div className="integration-keys">{keys.map(key=><div className="integration-key" key={key.id}><div><strong>{key.name}</strong><small>权限 {key.scope} · 尾号 {key.hint} · 到期 {date(key.expiresAt)} · {key.lastUsedAt?`最近使用 ${date(key.lastUsedAt)}`:"尚未使用"}</small></div><button className="text-button" disabled={busy} onClick={()=>revoke(key)} aria-label={`撤销${key.name}API密钥`}><Trash2 size={13}/>撤销</button></div>)}</div>
     <p className="subtle">密钥有效期 90 天，最多 5 个；权限以创建时勾选项为准，撤销立即生效。每个密钥每分钟最多 20 次请求。不会返回已保存的 Kaggle Token。</p>
-    <div className="integration-doc"><strong>开发者文档</strong><p><a href="/generation-api-guide.txt" target="_blank" rel="noreferrer">生成 API 调用说明</a> · <a href="/api/v1/openapi.json" target="_blank" rel="noreferrer">OpenAPI 规范</a> · <a href="/studio-api-client.py" download>Python 示例</a></p><strong>账户接入地址</strong><code>POST /api/v1/accounts</code><p>请求头：Authorization: Bearer 你的工作室 API 密钥；Content-Type: application/json</p><pre>{'{"name":"创作账户","token":"KGAT_…"}'}</pre><p>返回账户 id、name、username、hint、created_at。GET 同一地址可读取你的账户列表。每个工作空间最多连接 20 个账户。</p><a className="button secondary small" href="/connect-kaggle-account.py" download><ArrowDownToLine size={14}/>下载 Python 接入脚本</a><a className="token-help" href="/account-api-guide.txt" target="_blank" rel="noreferrer">查看完整调用说明与错误码</a></div>
+    <div className="integration-doc"><a className="ms-button subtle" href="/integrations"><BookOpen size={15}/>返回 API 文档</a></div>
   </div></details>;
 }
