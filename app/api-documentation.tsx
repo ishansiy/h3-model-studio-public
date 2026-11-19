@@ -5,14 +5,19 @@ import { ArrowDownToLine, BookOpen, Check, ChevronDown, Copy, KeyRound } from 'l
 import { API_SPEC } from '../lib/api-spec';
 import styles from './api-documentation.module.css';
 
-type JsonContent = Record<string, { schema?: unknown; example?: unknown }>;
+type JsonContent = Record<string, {
+  schema?: unknown;
+  example?: unknown;
+  examples?: Record<string, { summary: string; value: unknown }>;
+}>;
 type Parameter = { name: string; in: string; required?: boolean; description?: string; schema: unknown };
 type Operation = {
   summary: string;
   description: string;
+  'x-required-scope': string;
   parameters?: Parameter[];
   requestBody?: { content: JsonContent };
-  responses: Record<string, { description: string; content?: JsonContent }>;
+  responses: Record<string, { description: string; content?: JsonContent; headers?: Record<string, { description: string }> }>;
 };
 
 const routes = Object.entries(API_SPEC.paths).flatMap(([path, methods]) =>
@@ -64,8 +69,7 @@ function Code({ value, label }: { value: string; label: string }) {
   </div>;
 }
 
-function curlExample(route: typeof routes[number], origin: string) {
-  const example = route.operation.requestBody?.content['application/json']?.example;
+function curlExample(route: typeof routes[number], origin: string, example?: unknown) {
   const isDownload = route.path.endsWith('/artifact');
   const url = `${origin || '$STUDIO_URL'}${route.path.replace('{id}', '$JOB_ID')}${isDownload ? '?download=1' : ''}`;
   return [
@@ -78,7 +82,9 @@ function curlExample(route: typeof routes[number], origin: string) {
 
 function Endpoint({ route, origin }: { route: typeof routes[number]; origin: string }) {
   const { id, method, path, operation } = route;
-  const requestSchema = operation.requestBody?.content['application/json']?.schema;
+  const request = operation.requestBody?.content['application/json'];
+  const examples = Object.values(request?.examples ?? {});
+  const [primary, ...additional] = examples;
   return <details className={styles.endpoint} id={id}>
     <summary>
       <span className={`${styles.method} ${method === 'post' ? styles.post : styles.get}`}>{method.toUpperCase()}</span>
@@ -87,6 +93,7 @@ function Endpoint({ route, origin }: { route: typeof routes[number]; origin: str
       <ChevronDown className={styles.chevron} size={17} aria-hidden="true" />
     </summary>
     <div className={styles.endpointBody}>
+      <p>所需权限 <code>{operation['x-required-scope']}</code></p>
       <p>{operation.description}</p>
       {operation.parameters?.length ? <div>
         <h3>请求参数</h3>
@@ -97,19 +104,30 @@ function Endpoint({ route, origin }: { route: typeof routes[number]; origin: str
           </div>)}
         </dl>
       </div> : null}
-      <Code label="cURL 请求示例" value={curlExample(route, origin)} />
-      {requestSchema ? <details className={styles.schema}>
+      <Code label={primary ? `cURL · ${primary.summary}` : 'cURL 请求示例'} value={curlExample(route, origin, primary?.value ?? request?.example)} />
+      {additional.map(example => <details key={example.summary} className={styles.schema}>
+        <summary>{example.summary}<ChevronDown size={15} aria-hidden="true" /></summary>
+        <Code label={`cURL · ${example.summary}`} value={curlExample(route, origin, example.value)} />
+      </details>)}
+      {request?.schema ? <details className={styles.schema}>
         <summary>请求体结构<ChevronDown size={15} aria-hidden="true" /></summary>
-        <Code label="请求 JSON Schema" value={formatted(describeSchema(requestSchema))} />
+        <Code label="请求 JSON Schema" value={formatted(describeSchema(request.schema))} />
       </details> : null}
       <div>
         <h3>响应</h3>
         <div className={styles.responses}>
           {Object.entries(operation.responses).map(([status, response]) => {
             const contents = Object.entries(response.content ?? {});
-            return contents.length ? <details className={styles.schema} key={status}>
+            const headers = Object.entries(response.headers ?? {});
+            return contents.length || headers.length ? <details className={styles.schema} key={status}>
               <summary><code>{status}</code><span>{response.description}</span><ChevronDown size={15} aria-hidden="true" /></summary>
-              {contents.map(([mime, content]) => <Code key={mime} label={mime} value={formatted(describeSchema(content.schema))} />)}
+              {headers.length ? <dl className={styles.responseHeaders}>
+                {headers.map(([name, header]) => <div key={name}><dt><code>{name}</code></dt><dd>{header.description}</dd></div>)}
+              </dl> : null}
+              {contents.map(([mime, content]) => <div key={mime} className={styles.responseContent}>
+                {content.example !== undefined && <Code label="响应示例" value={formatted(content.example)} />}
+                {content.schema !== undefined && <Code label={`${mime} · 响应结构`} value={formatted(describeSchema(content.schema))} />}
+              </div>)}
             </details> : <div className={styles.response} key={status}><code>{status}</code><span>{response.description}</span></div>;
           })}
         </div>
@@ -160,6 +178,12 @@ export default function ApiDocumentation({ publicOpenApiUrl }: { publicOpenApiUr
         <h2>身份验证</h2>
         <p>在请求头中传入 <code>Authorization: Bearer 你的工作室 API 密钥</code>。按所调用的接口为密钥勾选权限。运行示例前，请换成自己的密钥和账户或任务 ID。</p>
         <Code label="cURL 快速开始" value={curlExample(routes[0], origin)} />
+        <ol className={styles.workflow}>
+          <li><a href="#get-accounts">读取计算账户</a>，取账户 ID，并从<a href="#get-models">模型目录</a>选择模型与尺寸。</li>
+          <li><a href="#post-jobs">提交生成任务</a>，保存自己的 <code>requestId</code>。超时后沿用该 ID 和原参数，避免重复生成。</li>
+          <li>每 5–10 秒<a href="#get-jobs-id">查询一次进度</a>。收到 <code>429</code> 时按 <code>Retry-After</code> 等待。</li>
+          <li>状态到 <code>completed</code> 后<a href="#get-jobs-id-artifact">下载作品</a>，根据响应类型保存为 PNG 或 MP4。</li>
+        </ol>
         <div className={styles.resources}>
           <a href="/studio-api-client.py" download>下载 Python 生成示例 <ArrowDownToLine size={14} /></a>
           <a href="/connect-kaggle-account.py" download>下载账户接入脚本 <ArrowDownToLine size={14} /></a>

@@ -9,6 +9,7 @@ import {db,job} from '../lib/store';
 import {closeStorage,env} from '../lib/node-runtime';
 import {GET,POST,DELETE} from '../app/api/v1/[...path]/route';
 import {GET as spec} from '../app/api/v1/openapi.json/route';
+import {GET as getAccounts} from '../app/api/v1/accounts/route';
 const dir=mkdtempSync(join(tmpdir(),'studio-api-'));process.env.SQLITE_PATH=join(dir,'test.sqlite');process.env.BOOTSTRAP_OWNER_ID='owner';
 const originalFetch=globalThis.fetch;globalThis.fetch=async()=>{throw Error('测试禁止联网与启动真实GPU');};
 try{
@@ -57,6 +58,18 @@ try{
  await d.prepare('UPDATE jobs SET owner=? WHERE id=?').bind('other',id).run();assert.equal((await run('jobs/'+id)).status,404);
  const revoked=await createIntegrationKey(d,'owner','撤销',Date.now(),['models:read']);await revokeIntegrationKey(d,'owner',revoked.key.id);assert.equal((await run('models','GET',undefined,revoked.token)).status,401);
  const now=Date.now()+120000;const authReq=req('models','GET',undefined,token);for(let i=0;i<20;i++)await authenticateIntegration(authReq,d,now,'models:read');await assert.rejects(authenticateIntegration(authReq,d,now,'models:read'),(e:any)=>e.status===429);
- assert.equal((await spec().json() as any).openapi,'3.1.0');
+ const document=await spec().json() as typeof import('../lib/api-spec').API_SPEC;
+ assert.equal(document.openapi,'3.1.0');
+ const operations=Object.values(document.paths).flatMap(path=>Object.values(path as Record<string,{'operationId':string;'x-required-scope':string}>));
+ assert.equal(operations.length,9);
+ for(const operation of operations)parseScopes([operation['x-required-scope']]);
+ assert.equal(new Set(operations.map(operation=>operation.operationId)).size,9);
+ assert.ok(!Object.hasOwn(document.components.schemas.ModelsResponse.properties,'categories'));
+ const samples=document.paths['/api/v1/jobs'].post.requestBody.content['application/json'].examples;
+ assert.equal(generationInput(samples.video.value).category,'video');
+ assert.equal(generationInput(samples.image.value).category,'image');
+ const deniedAccount=await getAccounts(new Request('https://studio.test/api/v1/accounts'));
+ assert.equal(deniedAccount.status,401);
+ assert.match(deniedAccount.headers.get('x-request-id')||'',/^[a-f0-9-]{36}$/);
  console.log('通过：真实API路由/SQLite队列、旧密钥最小权限、新密钥权限、幂等与冲突、种子复用、参数限制、取消、下载Range、所有者隔离、撤销和限流（无GPU提交）。');
 }finally{globalThis.fetch=originalFetch;await closeStorage();rmSync(dir,{recursive:true,force:true});}

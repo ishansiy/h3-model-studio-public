@@ -16,6 +16,10 @@
 .resources { display: flex; flex-wrap: wrap; gap: 10px 24px; margin-top: 14px; }
 .resources a { display: inline-flex; gap: 6px; align-items: center; color: #e9c48b; font-size: 13px; }
 .resources a:hover { text-decoration: underline; }
+.workflow { margin: 16px 0 0; padding-left: 22px; color: #bac0c8; font-size: 13px; line-height: 1.85; }
+.workflow a { color: #e9c48b; }
+.workflow a:hover { text-decoration: underline; }
+.workflow code { color: #e9c48b; }
 .group { margin-top: 34px; }
 .contents {
   grid-column: 2;
@@ -92,6 +96,10 @@
 .schema > summary span { color: #b4bbc4; }
 .response code, .schema > summary code { color: #fee0ad; font-weight: 650; }
 .schema > .code { margin: 0 9px 9px; }
+.responseHeaders { display: grid; gap: 8px; margin: 0 10px 10px; color: #b4bbc4; font-size: 12px; }
+.responseHeaders > div { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.responseHeaders dd { margin: 0; }
+.responseContent { display: grid; gap: 8px; margin: 0 9px 9px; }
 @media (max-width: 950px) {
   .layout { display: flex; flex-direction: column; gap: 18px; }
   .main { width: 100%; }

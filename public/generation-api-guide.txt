@@ -1,20 +1,29 @@
 影像工作室 · 对外 API v1
 
-服务根地址：当前工作室网址。例如 https://your-app.onrender.com
-OpenAPI：/api/v1/openapi.json
+在线服务：https://h3-model-studio.onrender.com
+公开规范：https://h3-model-studio.onrender.com/api/v1/openapi.json
+直接 GET 公开规范，无需登录、Cookie 或 API 密钥。规范的 servers 含线上服务地址。
+各业务接口的 x-required-scope 字段给出相应的密钥权限。
 Python 示例：/studio-api-client.py
 
 一、鉴权
-在“计算账户 → 脚本接入 API”创建密钥，按需勾选：
+在「API 接入 → 管理 API 密钥」创建密钥，按需勾选：
 models:read 模型目录；jobs:read 任务、结果、远端核对；jobs:write 创建/取消；
 accounts:read 账户列表；accounts:write 接入或更新账户。
 旧密钥仍只有 accounts:read accounts:write，不会自动获得生成权限。
 每个密钥每分钟最多20次，有效期90天，最多5个有效密钥。
-所有请求带 Authorization: Bearer <工作室密钥>，不是 Kaggle Token 或站点密码。
+下方业务接口的请求使用 Authorization: Bearer <工作室密钥>，不是 Kaggle Token 或站点密码。
 不得把密钥放在 URL 中。调用 API 无需浏览器 cookie。API 不返回已保存的 Kaggle Token。
 这是服务端接入 API；不对任意第三方网页开放跨域访问。
 
-二、接口
+二、典型流程
+先通过模型接口读取尺寸和默认值，在账户接口读取 accountId。
+客户端生成小写 UUID 作为 requestId，再提交任务。
+从 Location 或 job.id 查询进度，每 5–10 秒一次。
+completed 后下载 PNG 或 MP4，依据 Content-Type 选择扩展名。
+提交超时先按原 requestId 查询。重试沿用原 ID 和原参数。
+
+三、接口
 GET  /api/v1/models                         返回模型目录、尺寸、默认参数
 GET  /api/v1/accounts                       返回账户列表，取 id 作为 accountId
 POST /api/v1/accounts                       接入或更新账户，沿用原账户 API
@@ -26,7 +35,7 @@ POST /api/v1/jobs/<id>/cancel                请求取消，收到202不代表�
 GET  /api/v1/jobs/<id>/artifact              读取PNG或MP4；支持Range
 GET  /api/v1/jobs/<id>/artifact?download=1   下载作品，同样需要Bearer认证
 
-三、创建任务
+四、创建任务
 Content-Type: application/json；最大32KiB。
 requestId 为小写 UUID（由客户端生成），accountId 为已有账户 UUID。
 同一次业务请求重试必须沿用 requestId，不要每次换 ID。
@@ -50,10 +59,10 @@ seed 可省略：服务端随机生成并保存；重试省略时沿用原种子
   1024×768、5秒实际对齐为124帧约5.17秒；内置已验证的加速路径。
 - z-image-turbo：默认图像模型，9调度步；runtimeProfile=standard。
   不接受duration/mode。图像描述最长3000字符，视频最长6000字符。
-模型、尺寸、默认值以 GET /models 与服务器验证为准；未填写采用模型默认值。
+模型、尺寸、默认值以 GET /api/v1/models 与服务器验证为准；未填写采用模型默认值。
 H3省略时长时，最高分辨率自动采用该档默认上限4.46秒；显式超界会拒绝，不降低参数。
 
-四、队列和状态
+五、队列和状态
 返回 {job:{id,status,stage,step,totalSteps,params,...},replayed:false}，Location 指向查询地址。
 queued/running 表示排队/执行；completed 表示作品已交付到工作室；failed/cancelled 为终态。
 建议每5–10秒查询GET状态，收到429按Retry-After等待；不要把每次轮询都变成sync。
@@ -64,7 +73,7 @@ queued/running 表示排队/执行；completed 表示作品已交付到工作室
 completed不等于人工画质验收；外部调用方应下载并检查实际作品。
 下载前应确认本地文件不存在，避免覆盖自己的作品。
 
-五、错误
+六、错误
 JSON统一 {error:"中文说明",code:"机器错误码"}，生成接口带X-Request-Id便于排查。
 400 invalid_parameters/invalid_request/invalid_pagination：参数或分页错误
 401 invalid_api_key：密钥缺失、过期或撤销
@@ -77,6 +86,6 @@ JSON统一 {error:"中文说明",code:"机器错误码"}，生成接口带X-Requ
 429 rate_limited：按Retry-After重试
 500 internal_error：临时错误，用X-Request-Id联系管理员，创建任务重试沿用原requestId
 
-六、兼容
+七、兼容
 原有 /api/v1/accounts 和账户接入脚本继续可用。
 新增生成权限不会授权删除账户、修改代理、读取凭证或管理其他人的工作空间。

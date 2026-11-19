@@ -1,28 +1,274 @@
-const ref=(name:string)=>({$ref:`#/components/schemas/${name}`});
-const json=(schema:unknown,example?:unknown)=>({'application/json':{schema,...(example===undefined?{}:{example})}});
-const generationExample={requestId:'123e4567-e89b-42d3-a456-426614174000',accountId:'123e4567-e89b-42d3-a456-426614174001',category:'video',modelId:'hyperflow-h3-flash',prompt:'一只小黄鸭在水面缓缓漂浮。',width:512,height:288,duration:5,steps:4};
-const error={description:'请求失败；查看 code 和 X-Request-Id',content:json(ref('Error'))};
-const jobResponses={'200':{description:'任务状态',content:json(ref('JobResponse'))},'400':error,'401':error,'403':error,'404':error,'409':error,'429':error};
-const id={name:'id',in:'path',required:true,schema:{type:'string',format:'uuid'}};
-export const API_SPEC={openapi:'3.1.0',info:{title:'影像工作室对外 API',version:'1.0.0',description:'异步图像与视频生成、账户接入。Bearer API 密钥在 /integrations/keys 创建。任务参数、质量限制与网站一致。'},servers:[{url:'/'}],security:[{BearerAuth:[]}],paths:{
- '/api/v1/models':{get:{summary:'查询可用模型、分辨率和默认参数',description:'需要 models:read',responses:{'200':{description:'模型目录',content:json(ref('ModelsResponse'))},'401':error,'403':error,'429':error}}},
- '/api/v1/accounts':{get:{summary:'查询已接入账户',description:'需要 accounts:read；不返回 Kaggle Token',responses:{'200':{description:'accounts 列表',content:json(ref('AccountsResponse'))},'401':error,'403':error,'429':error}},post:{summary:'接入或更新自己的 Kaggle 账户',description:'需要 accounts:write；同用户名更新原账户',requestBody:{required:true,content:json({type:'object',additionalProperties:false,required:['token'],properties:{name:{type:'string',maxLength:40},username:{type:'string'},token:{type:'string',writeOnly:true,pattern:'^KGAT_'}}},{name:'创作账户',token:'KGAT_YOUR_TOKEN'})},responses:{'200':{description:'account 信息',content:json(ref('AccountResponse'))},'400':error,'401':error,'403':error,'429':error}}},
- '/api/v1/jobs':{get:{summary:'分页查询任务',description:'需要 jobs:read；仅查询已记录状态，不请求远端 Kaggle',parameters:[{name:'limit',in:'query',schema:{type:'integer',minimum:1,maximum:100,default:20}},{name:'cursor',in:'query',schema:{type:'string',format:'uuid'},description:'上一页 nextCursor'}],responses:{'200':{description:'jobs 列表与 nextCursor（末页为 null）',content:json(ref('JobsResponse'))},'400':error,'401':error,'403':error,'429':error}},post:{summary:'提交图像或视频任务',description:'需要 jobs:write。requestId 为客户端生成 UUID，重试必须沿用相同 ID；相同 ID 不重复启动 GPU，参数冲突返回 409。seed 不填由服务端随机生成并保存。任务复用同账户同模型同运行方案的会话。',requestBody:{required:true,content:json(ref('GenerationRequest'),generationExample)},responses:{'202':{description:'任务已接收；Location 为状态地址',content:json(ref('JobResponse'))},...jobResponses}}},
- '/api/v1/jobs/{id}':{get:{summary:'查询任务进度',description:'需要 jobs:read；读取已记录状态，建议每 5–10 秒查询一次',parameters:[id],responses:jobResponses}},
- '/api/v1/jobs/{id}/sync':{post:{summary:'核对远端任务状态',description:'需要 jobs:read。心跳中断时使用，远端失败不自动重新提交。',parameters:[id],responses:jobResponses}},
- '/api/v1/jobs/{id}/cancel':{post:{summary:'请求取消任务',description:'需要 jobs:write；排队任务直接取消，运行任务异步停止。202 只是收到停止请求，须查询到 cancelled 才确认停止；同会话其他排队任务不受影响。',parameters:[id],responses:{...jobResponses,'202':{description:'正在停止',content:json(ref('JobResponse'))}}}},
- '/api/v1/jobs/{id}/artifact':{get:{summary:'读取或下载实际图片/视频',description:'需要 jobs:read，任务须 completed。支持 Range；下载仍需 Bearer 认证，不提供公开令牌 URL。',parameters:[id,{name:'download',in:'query',description:'传 1 时按附件下载。',schema:{type:'string',enum:['1']}},{name:'Range',in:'header',description:'可选字节范围，例如 bytes=0-1023。',schema:{type:'string'}}],responses:{'200':{description:'PNG 图片或 MP4 视频',content:{'image/png':{schema:{type:'string',format:'binary'}},'video/mp4':{schema:{type:'string',format:'binary'}}}},'206':{description:'部分媒体字节'},'416':{description:'Range 无效'},'401':error,'403':error,'404':error,'410':error,'429':error}}},
-},components:{securitySchemes:{BearerAuth:{type:'http',scheme:'bearer',bearerFormat:'H3AK_...'}},schemas:{
- ModelsResponse:{type:'object',properties:{
-  categories:{type:'array',items:{type:'object',properties:{id:{type:'string'},label:{type:'string'},defaultModelId:{type:'string'}}}},
-  models:{type:'array',items:{type:'object',properties:{id:{type:'string'},category:{type:'string'},name:{type:'string'},description:{type:'string'},resolutions:{type:'array',items:{type:'object',properties:{value:{type:'string'},label:{type:'string'}}}},defaults:{type:'object'}}}},
- }},
- ConnectedAccount:{type:'object',properties:{id:{type:'string',format:'uuid'},name:{type:'string'},username:{type:'string'},hint:{type:'string'},created_at:{type:'integer',description:'Unix 毫秒'}}},
- AccountsResponse:{type:'object',properties:{accounts:{type:'array',items:ref('ConnectedAccount')}}},
- AccountResponse:{type:'object',properties:{account:ref('ConnectedAccount')}},
- JobsResponse:{type:'object',properties:{jobs:{type:'array',items:ref('Job')},nextCursor:{type:['string','null'],format:'uuid'}}},
- Error:{type:'object',required:['error','code'],properties:{error:{type:'string'},code:{type:'string'}}},
- GenerationRequest:{type:'object',additionalProperties:false,required:['requestId','accountId','prompt'],properties:{requestId:{type:'string',format:'uuid'},accountId:{type:'string',format:'uuid'},category:{type:'string',enum:['video','image']},modelId:{type:'string',enum:['h3','hyperflow-h3-flash','z-image-turbo']},prompt:{type:'string',minLength:1,maxLength:6000},width:{type:'integer'},height:{type:'integer'},mode:{type:'string',enum:['quality','turbo']},duration:{type:'number',minimum:4,maximum:15},steps:{type:'integer',minimum:1,maximum:50},runtimeProfile:{type:'string',enum:['standard','fp16','ck']},seed:{oneOf:[{type:'string',pattern:'^[0-9]{1,20}$'},{type:'integer',minimum:0,maximum:9007199254740991}],description:'最大 18446744073709551615；大整数必须用字符串'}}},
- JobResponse:{type:'object',properties:{replayed:{type:'boolean'},job:ref('Job')}},
- Job:{type:'object',required:['id','status','params'],properties:{id:{type:'string',format:'uuid'},status:{type:'string',enum:['submitting','submission_unknown','queued','running','completed','failed','cancelled']},category:{type:'string'},modelId:{type:'string'},accountId:{type:'string'},params:{type:'object',description:'实际执行参数和随机种子'},stage:{type:'string'},step:{type:'integer'},totalSteps:{type:'integer'},stopRequestedAt:{type:['integer','null']},error:{type:['string','null']},metadata:{type:['object','null']},createdAt:{type:'integer',description:'Unix 毫秒'},updatedAt:{type:'integer',description:'Unix 毫秒'}}},
-}}};
+import { MODEL_CATALOG } from './model-catalog';
+
+const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
+const json = (schema: unknown, example?: unknown) => ({
+  'application/json': example === undefined ? { schema } : { schema, example },
+});
+const header = (description: string, type = 'string') => ({ description, schema: { type } });
+const traceHeaders = { 'X-Request-Id': header('请求追踪标识。排查问题时提供这个值。') };
+
+function response(description: string, schema: string, example?: unknown, headers = {}) {
+  return { description, headers: { ...traceHeaders, ...headers }, content: json(ref(schema), example) };
+}
+function error(description: string, code: string, message: string, headers = {}) {
+  return response(description, 'Error', { error: message, code }, headers);
+}
+
+const unauthorized = error('密钥缺失、无效、过期或已撤销。', 'invalid_api_key', '请使用工作室 API 密钥作为 Bearer Token。');
+const forbidden = error('密钥缺少该接口所需权限。', 'insufficient_scope', '此 API 密钥缺少所需权限。');
+const rateLimited = error('同一个密钥每分钟最多 20 次请求。', 'rate_limited', '请求过于频繁。', {
+  'Retry-After': header('再次请求前等待的秒数。', 'integer'),
+});
+const unavailable = error('工作室尚未配置或作品存储暂不可用。', 'upstream_error', '服务暂时不可用。');
+const invalidType = error('提交的请求体必须使用 application/json。', 'invalid_content_type', '请使用 application/json。');
+const tooLarge = error('请求体超过该接口的字节上限。', 'body_too_large', '请求内容过大。');
+const taskMissing = error('找不到该工作室的任务。', 'not_found', '任务不存在。');
+const invalidTask = error('请求字段、UUID、模型或参数组合不合法。', 'invalid_parameters', '请选择支持的生成参数。');
+const conflict = error('请求 ID 与既有任务参数不一致，或当前 GPU 会话条件不允许排队。', 'conflict', '请核对 requestId、模型和会话状态。');
+const commonErrors = { '401': unauthorized, '403': forbidden, '429': rateLimited, '503': unavailable };
+
+const jobId = '123e4567-e89b-42d3-a456-426614174000';
+const accountId = '123e4567-e89b-42d3-a456-426614174001';
+const videoExample = {
+  requestId: jobId, accountId, category: 'video', modelId: 'hyperflow-h3-flash',
+  prompt: '一只小黄鸭在水面缓缓漂浮。', width: 512, height: 288, duration: 5, steps: 4,
+};
+const imageExample = {
+  requestId: '123e4567-e89b-42d3-a456-426614174002', accountId, category: 'image', modelId: 'z-image-turbo',
+  prompt: '阳光下的一只白色小猫。', width: 1024, height: 1024, steps: 9,
+};
+const accountExample = { id: accountId, name: '创作账户', username: 'example_user', hint: '…1234', created_at: 1795080000000 };
+const { requestId: _requestId, accountId: _accountId, ...sampleParams } = videoExample;
+const job = {
+  id: jobId, accountId, category: 'video', modelId: 'hyperflow-h3-flash', artifactMime: 'video/mp4',
+  status: 'queued', stage: '等待会话处理', step: 0, totalSteps: 4,
+  params: { ...sampleParams, mode: 'quality', runtimeProfile: 'standard', seed: '17047248144683748259' },
+  createdAt: 1795080000000, updatedAt: 1795080000000, stopRequestedAt: null, error: null, metadata: null,
+};
+const id = { name: 'id', in: 'path', required: true, description: '任务 UUID，与提交时的 requestId 相同。', schema: { type: 'string', format: 'uuid' } };
+const locationHeaders = { Location: header('相对任务查询路径，例如 /api/v1/jobs/{id}。') };
+const contentHeaders = {
+  'Accept-Ranges': header('支持的范围单位：bytes。'),
+  'Content-Disposition': header('download=1 返回附件文件名，省略时以内联方式返回。'),
+  'Content-Length': header('此次响应的字节数。', 'integer'),
+};
+const media = {
+  'image/png': { schema: { type: 'string', format: 'binary' } },
+  'video/mp4': { schema: { type: 'string', format: 'binary' } },
+};
+const sizeRule = '宽、高使用模型目录 resolutions 中的配对尺寸，单位像素。省略时使用模型默认值。';
+
+export const API_SPEC = {
+  openapi: '3.1.0',
+  info: {
+    title: '模型工作室对外 API',
+    version: '1.0.0',
+    description: [
+      'GET /api/v1/openapi.json 可直接读取规范。以下业务接口使用 Authorization: Bearer <工作室 API 密钥>。',
+      '在 /integrations/keys 创建密钥，使用各接口的 x-required-scope 勾选权限。密钥有效期 90 天，每个密钥每分钟最多 20 次请求。',
+      '典型流程：读取模型和账户 → 生成小写 UUID → 提交 → 每 5–10 秒查询任务 → completed 后下载。提交超时先按原 UUID 查询，重试沿用同一 UUID 和参数。',
+      '429 时按 Retry-After 等待。任务执行失败体现在 job.status=failed，并可查看 job.error。',
+    ].join('\n\n'),
+  },
+  servers: [{ url: '/' }],
+  security: [{ BearerAuth: [] }],
+  tags: ['模型', '计算账户', '生成任务', '作品下载'].map(name => ({ name })),
+  paths: {
+    '/api/v1/models': {
+      get: {
+        operationId: 'listModels', tags: ['模型'], 'x-required-scope': 'models:read',
+        summary: '查询可用模型、分辨率和默认参数',
+        description: '返回 models 数组。创建前按 id 选择模型，并使用其 resolutions 和 defaults。',
+        responses: { '200': response('模型目录。', 'ModelsResponse', { models: MODEL_CATALOG }), ...commonErrors },
+      },
+    },
+    '/api/v1/accounts': {
+      get: {
+        operationId: 'listAccounts', tags: ['计算账户'], 'x-required-scope': 'accounts:read',
+        summary: '查询已接入账户',
+        description: '从 accounts[].id 取生成任务需要的 accountId。响应只含账户标识、名称、用户名、密钥提示和接入时间。',
+        responses: { '200': response('已接入账户列表。', 'AccountsResponse', { accounts: [accountExample] }), ...commonErrors },
+      },
+      post: {
+        operationId: 'upsertAccount', tags: ['计算账户'], 'x-required-scope': 'accounts:write',
+        summary: '接入或更新自己的 Kaggle 账户',
+        description: '请求体最多 8 KiB。token 为该账户的 Kaggle API Token。用户名由 Kaggle 验证，同名账户更新后保留原 id。',
+        requestBody: {
+          required: true,
+          content: json(ref('AccountRequest'), { name: '创作账户', token: 'KGAT_REPLACE_WITH_YOUR_TOKEN' }),
+        },
+        responses: {
+          '200': response('已保存的账户。', 'AccountResponse', { account: accountExample }),
+          '400': error('Token、用户名、名称或账户接入验证失败。', 'invalid_account', '请输入有效的 Kaggle API Token。'),
+          '413': tooLarge, '415': invalidType, ...commonErrors,
+        },
+      },
+    },
+    '/api/v1/jobs': {
+      get: {
+        operationId: 'listJobs', tags: ['生成任务'], 'x-required-scope': 'jobs:read',
+        summary: '分页查询任务',
+        description: '按创建时间倒序返回本地记录。用上一页 nextCursor 请求下一页，null 表示末页。',
+        parameters: [
+          { name: 'limit', in: 'query', description: '每页 1–100 条，默认 20。', schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+          { name: 'cursor', in: 'query', description: '上次响应的 nextCursor。第一页省略。', schema: { type: 'string', format: 'uuid' } },
+        ],
+        responses: {
+          '200': response('当前页任务与下一页游标。', 'JobsResponse', { jobs: [job], nextCursor: null }),
+          '400': error('页大小或游标无效。', 'invalid_pagination', 'limit 为 1–100，cursor 为上一页返回的任务 UUID。'),
+          ...commonErrors,
+        },
+      },
+      post: {
+        operationId: 'createJob', tags: ['生成任务'], 'x-required-scope': 'jobs:write',
+        summary: '提交图像或视频任务',
+        description: '请求体最多 32 KiB。requestId 由客户端生成。相同 ID 与参数可重试，相同 ID 改参数返回 409。seed 省略时由服务端分配，最终生效参数见 job.params。202 表示任务已受理，后续需查询状态。同账户同模型同运行方案可以复用 GPU 会话。',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: ref('GenerationRequest'),
+              examples: {
+                video: { summary: '生成视频', value: videoExample },
+                image: { summary: '生成图片', value: imageExample },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': response('复用已存在的任务。', 'JobSubmissionResponse', { job, replayed: true }, locationHeaders),
+          '202': response('新任务已受理，使用 Location 或 job.id 查询。', 'JobSubmissionResponse', { job, replayed: false }, locationHeaders),
+          '400': invalidTask,
+          '404': error('未找到所选计算账户。', 'not_found', '请选择已连接的 Kaggle 账户。'),
+          '409': conflict, '413': tooLarge, '415': invalidType, ...commonErrors,
+        },
+      },
+    },
+    '/api/v1/jobs/{id}': {
+      get: {
+        operationId: 'getJob', tags: ['生成任务'], 'x-required-scope': 'jobs:read',
+        summary: '查询任务进度',
+        description: '建议每 5–10 秒查询一次。本接口读取工作室已记录的状态。completed、failed、cancelled 为终态。生成失败时查看 job.error。',
+        parameters: [id],
+        responses: { '200': response('任务最新记录。', 'JobResponse', { job }), '404': taskMissing, ...commonErrors },
+      },
+    },
+    '/api/v1/jobs/{id}/sync': {
+      post: {
+        operationId: 'syncJob', tags: ['生成任务'], 'x-required-scope': 'jobs:read',
+        summary: '核对远端任务状态',
+        description: '无需请求体。进度长时间不更新或 GPU 心跳中断时使用。例行轮询使用 GET。返回的是核对后当前保存的任务记录。',
+        parameters: [id],
+        responses: { '200': response('核对后的任务记录。', 'JobResponse', { job }), '400': invalidTask, '404': taskMissing, ...commonErrors },
+      },
+    },
+    '/api/v1/jobs/{id}/cancel': {
+      post: {
+        operationId: 'cancelJob', tags: ['生成任务'], 'x-required-scope': 'jobs:write',
+        summary: '请求取消任务',
+        description: '无需请求体。等待中的任务通常可以立即取消。收到 202 后继续 GET 查询，job.status=cancelled 时确认。连续会话中的其他任务可继续排队。',
+        parameters: [id],
+        responses: {
+          '200': response('返回当前任务记录，包括立即取消和部分既有终态。', 'JobResponse', { job: { ...job, status: 'cancelled', stage: '已取消排队' } }),
+          '202': response('取消请求已受理，请继续查询。', 'JobResponse', { job: { ...job, status: 'running', stopRequestedAt: 1795080001000 } }),
+          '400': invalidTask, '404': taskMissing, '409': conflict, ...commonErrors,
+        },
+      },
+    },
+    '/api/v1/jobs/{id}/artifact': {
+      get: {
+        operationId: 'downloadArtifact', tags: ['作品下载'], 'x-required-scope': 'jobs:read',
+        summary: '读取或下载实际图片／视频',
+        description: '任务 completed 后读取二进制内容。根据 Content-Type 保存为 PNG 或 MP4。客户端可用 Range 读取或续传当前工作室保存的作品。',
+        parameters: [
+          id,
+          { name: 'download', in: 'query', description: '传 1 时按附件下载，默认内联。', schema: { type: 'string', enum: ['1'] } },
+          { name: 'Range', in: 'header', description: '可选的单段字节范围，例如 bytes=0-1023。', schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': { description: '完整 PNG 或 MP4 文件。', headers: { ...traceHeaders, ...contentHeaders }, content: media },
+          '206': { description: '请求范围内的文件字节。', headers: { ...traceHeaders, ...contentHeaders, 'Content-Range': header('返回的字节范围与文件总长度。') }, content: media },
+          '404': error('任务不存在、尚未完成或作品文件不可用。', 'not_found', '作品尚未生成。'),
+          '410': error('旧任务需要重新连接原 Kaggle 账户。', 'artifact_gone', '请重新连接该 Kaggle 账户以下载视频。'),
+          '416': { description: '字节范围无效。', headers: { ...traceHeaders, 'Content-Range': header('格式为 bytes */总字节数。') } },
+          '502': error('旧任务的远端文件暂时无法读取。', 'upstream_error', '视频读取失败，请稍后重试。'),
+          ...commonErrors,
+        },
+      },
+    },
+  },
+  components: {
+    securitySchemes: {
+      BearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'H3AK', description: '工作室 API 密钥，不是站点密码或 Kaggle Token。' },
+    },
+    schemas: {
+      Error: { type: 'object', required: ['error', 'code'], properties: { error: { type: 'string' }, code: { type: 'string' } } },
+      ModelsResponse: {
+        type: 'object', required: ['models'],
+        properties: { models: { type: 'array', items: ref('Model') } },
+      },
+      Model: {
+        type: 'object', required: ['id', 'category', 'name', 'resolutions', 'defaults'],
+        properties: {
+          id: { type: 'string' }, category: { type: 'string', enum: ['video', 'image'] }, name: { type: 'string' },
+          description: { type: 'string' },
+          resolutions: { type: 'array', items: { type: 'object', properties: { value: { type: 'string' }, label: { type: 'string' } } } },
+          defaults: { type: 'object', description: '该模型的默认生成参数。' },
+        },
+      },
+      AccountRequest: {
+        type: 'object', additionalProperties: false, required: ['token'],
+        properties: {
+          token: { type: 'string', writeOnly: true, pattern: '^KGAT_[A-Za-z0-9_-]{16,512}$', description: '拟接入账户的 Kaggle API Token。' },
+          name: { type: 'string', maxLength: 40, description: '显示名称。省略时由工作室填写。' },
+          username: { type: 'string', pattern: '^[a-zA-Z0-9_-]{2,64}$', description: '可选。填写时必须与 Kaggle 验证出的用户名一致。' },
+        },
+      },
+      ConnectedAccount: {
+        type: 'object', required: ['id', 'name', 'username', 'hint', 'created_at'],
+        properties: {
+          id: { type: 'string', format: 'uuid' }, name: { type: 'string' }, username: { type: 'string' },
+          hint: { type: 'string' }, created_at: { type: 'integer', description: 'Unix 毫秒。' },
+        },
+      },
+      AccountsResponse: { type: 'object', required: ['accounts'], properties: { accounts: { type: 'array', items: ref('ConnectedAccount') } } },
+      AccountResponse: { type: 'object', required: ['account'], properties: { account: ref('ConnectedAccount') } },
+      JobsResponse: {
+        type: 'object', required: ['jobs', 'nextCursor'],
+        properties: { jobs: { type: 'array', items: ref('Job') }, nextCursor: { type: ['string', 'null'], format: 'uuid' } },
+      },
+      GenerationRequest: {
+        type: 'object', additionalProperties: false, required: ['requestId', 'accountId', 'prompt'],
+        properties: {
+          requestId: { type: 'string', format: 'uuid', description: '客户端生成的小写 UUID。同一业务请求重试沿用该值。' },
+          accountId: { type: 'string', format: 'uuid', description: 'GET /api/v1/accounts 返回的 id。' },
+          category: { type: 'string', enum: ['video', 'image'], description: '省略时从模型推断。category=image 且省略模型时默认 z-image-turbo。' },
+          modelId: { type: 'string', enum: ['h3', 'hyperflow-h3-flash', 'z-image-turbo'], description: '必须与类别匹配。省略时视频默认 h3。' },
+          prompt: { type: 'string', minLength: 1, maxLength: 6000, description: '视频最多 6000 字符，图片最多 3000 字符。' },
+          width: { type: 'integer', description: sizeRule },
+          height: { type: 'integer', description: sizeRule },
+          mode: { type: 'string', enum: ['quality', 'turbo'], description: 'H3 原版默认 quality。HyperFlow 只支持 quality，图片省略。' },
+          duration: { type: 'number', minimum: 4, maximum: 15, description: '请求视频秒数。H3 为 4–15 秒，1024×768 上限 4.46 秒，HyperFlow 为 5–15 秒。图片省略。帧数对齐后实际时长可能略长。' },
+          steps: { type: 'integer', minimum: 1, maximum: 50, description: 'H3 原版 1–50（默认 20）、H3 Turbo 4 或 8（默认 8）、HyperFlow 4／6／8（默认 6）、Z-Image 固定 9。' },
+          runtimeProfile: { type: 'string', enum: ['standard', 'fp16', 'ck'], description: '默认 standard。fp16 仅 H3 原版，HyperFlow 和 Z-Image 仅 standard。' },
+          seed: { oneOf: [{ type: 'string', pattern: '^[0-9]{1,20}$' }, { type: 'integer', minimum: 0, maximum: 9007199254740991 }], description: '省略时随机分配。范围 0–18446744073709551615，超过 JavaScript 安全整数时使用十进制字符串。' },
+        },
+      },
+      JobSubmissionResponse: { type: 'object', required: ['job', 'replayed'], properties: { job: ref('Job'), replayed: { type: 'boolean' } } },
+      JobResponse: { type: 'object', required: ['job'], properties: { job: ref('Job') } },
+      Job: {
+        type: 'object', required: ['id', 'status', 'params', 'step', 'totalSteps'],
+        properties: {
+          id: { type: 'string', format: 'uuid' }, accountId: { type: 'string', format: 'uuid' },
+          category: { type: 'string', enum: ['video', 'image'] }, modelId: { type: 'string' },
+          artifactMime: { type: 'string', enum: ['video/mp4', 'image/png'] },
+          status: { type: 'string', enum: ['submitting', 'submission_unknown', 'queued', 'running', 'completed', 'failed', 'cancelled'] },
+          params: { type: 'object', description: '实际执行的参数和种子。' },
+          stage: { type: 'string' }, step: { type: 'integer' }, totalSteps: { type: 'integer' },
+          stopRequestedAt: { type: ['integer', 'null'] }, error: { type: ['string', 'null'] }, metadata: { type: ['object', 'null'] },
+          createdAt: { type: 'integer', description: 'Unix 毫秒。' }, updatedAt: { type: 'integer', description: 'Unix 毫秒。' },
+        },
+      },
+    },
+  },
+};

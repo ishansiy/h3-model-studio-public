@@ -130,10 +130,10 @@ GGUF加载器：https://github.com/city96/ComfyUI-GGUF
 
 ## 对外生成 API
 
-在计算账户页面创建带模型/任务权限的 API 密钥，使用 `Authorization: Bearer <工作室密钥>` 调用 `/api/v1/models`、`/api/v1/jobs`、`/api/v1/jobs/{id}`、`/sync`、`/cancel`、`/artifact`。原 `/api/v1/accounts` 保持兼容。旧密钥只保留账户权限，新增生成权限需要新建密钥。
+在「API 接入 → 管理 API 密钥」选择接口所需权限。业务请求使用 `Authorization: Bearer <工作室密钥>`。旧密钥继续使用创建时的权限。
 
 - [完整中文说明](public/generation-api-guide.txt)
 - [Python 调用示例](public/studio-api-client.py)
-- OpenAPI：运行站点的 `/api/v1/openapi.json`
+- 公开 OpenAPI：直接读取运行站点的 `/api/v1/openapi.json`。每个接口的 `x-required-scope` 标明所需权限。
 - 创建任务的 `requestId` 必须是客户端生成的小写 UUID；重试沿用该 ID，参数冲突返回 409。
 - 新增 `integration_keys.scopes` 由 SQLite/Postgres 启动迁移自动补齐，默认仅原账户权限。API 与网页登录使用同一个固定工作空间和任务队列。
