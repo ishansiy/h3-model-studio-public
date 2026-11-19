@@ -118,8 +118,18 @@ function Endpoint({ route, origin }: { route: typeof routes[number]; origin: str
   </details>;
 }
 
-export default function ApiDocumentation() {
+export default function ApiDocumentation({ publicOpenApiUrl }: { publicOpenApiUrl?: string }) {
   const [origin, setOrigin] = useState('');
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const shareUrl = publicOpenApiUrl || (origin ? `${origin}/api/v1/openapi.json` : '');
+  async function copyPublicUrl() {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopyState('copied');
+    } catch {
+      setCopyState('failed');
+    }
+  }
   useEffect(() => {
     setOrigin(window.location.origin);
     const expandLinkedEndpoint = () => {
@@ -140,6 +150,11 @@ export default function ApiDocumentation() {
       <div className={styles.toolbar}>
         <a className="ms-button primary" href="/integrations/keys"><KeyRound size={16} />管理 API 密钥</a>
         <a className="ms-button subtle" href="/api/v1/openapi.json" download="studio-openapi.json"><ArrowDownToLine size={16} />OpenAPI {API_SPEC.openapi}</a>
+        <button type="button" className="ms-button subtle" onClick={copyPublicUrl} disabled={!shareUrl} title={shareUrl}>
+          {copyState === 'copied' ? <Check size={16} /> : <Copy size={16} />}
+          <span aria-live="polite">{copyState === 'copied' ? '已复制公开 JSON 地址' : '复制公开 JSON 地址'}</span>
+        </button>
+        {copyState === 'failed' && <a className="ms-button subtle" href={shareUrl} target="_blank" rel="noreferrer">打开公开链接并手动复制</a>}
       </div>
       <section id="quickstart" className={styles.intro}>
         <h2>身份验证</h2>
