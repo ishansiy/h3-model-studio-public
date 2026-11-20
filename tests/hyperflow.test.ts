@@ -28,6 +28,12 @@ for steps in [4,6,8]:
  assert g['121']['class_type']=='StudioHyperFlowAudit' and g['121']['inputs']['nonce']=='fresh-uuid'
  assert g['14']['inputs']['noise']==['122',0] and c['sampler']=='euler' and c['cfg']==1 and c['frames']==124
  assert '119' not in g and '120' not in g
+ assert 'first_frame' not in g['104']['inputs'] and 'last_frame' not in g['104']['inputs']
+ g,c=scope['build_h3_workflow'](prompt='x',width=608,height=352,duration_seconds=5,steps=steps,seed=123,use_gpu1_clip=True,filename_prefix='with-frames',images={'firstFrame':'first.png','lastFrame':'last.png'})
+ assert g['123']=={'class_type':'LoadImage','inputs':{'image':'first.png'}}
+ assert g['124']=={'class_type':'LoadImage','inputs':{'image':'last.png'}}
+ assert g['104']['inputs']['first_frame']==['123',0] and g['104']['inputs']['last_frame']==['124',0]
+ assert g['9']['inputs']['steps']==steps
 print('Python与工作流通过')`],{input:JSON.stringify(nb),encoding:'utf8'});assert.equal(python.status,0,python.stderr);
 const d=new NodeDatabase('',':memory:');await d.ready;
 try{

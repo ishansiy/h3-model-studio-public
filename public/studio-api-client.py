@@ -1,30 +1,48 @@
 #!/usr/bin/env python3
 """影像工作室 API 示例，仅使用 Python 标准库。密钥通过隐藏输入读取。"""
-import argparse, getpass, json, pathlib, time, urllib.request, urllib.error, uuid
+import argparse, getpass, json, mimetypes, pathlib, time, urllib.request, urllib.error, uuid
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--base',required=True,help='工作室 HTTPS 地址')
 p.add_argument('--account',help='可选的账户 UUID，省略时自动分配')
 p.add_argument('--model',default='hyperflow-h3-flash',choices=['h3','hyperflow-h3-flash','z-image-turbo'])
 p.add_argument('--prompt',required=True)
 p.add_argument('--output',required=True)
+p.add_argument('--generation-type',choices=['text-to-video','image-to-video','frames-to-video','text-to-image','image-to-image','inpaint'])
+p.add_argument('--first-frame',type=pathlib.Path)
+p.add_argument('--last-frame',type=pathlib.Path)
+p.add_argument('--source-image',type=pathlib.Path)
+p.add_argument('--mask-image',type=pathlib.Path)
+p.add_argument('--strength',type=float)
 p.add_argument('--request-id',default=None,help='超时后重试沿用已打印的小写UUID')
 a=p.parse_args()
 if not a.base.startswith('https://'):p.error('请使用 HTTPS，以免泄露 API 密钥。')
 if pathlib.Path(a.output).exists():p.error('输出文件已存在，请换一个文件名。')
 token=getpass.getpass('工作室 API 密钥（隐藏输入）：')
-def call(path,body=None):
-    data=None if body is None else json.dumps(body,ensure_ascii=False).encode()
-    req=urllib.request.Request(a.base.rstrip('/')+'/api/v1/'+path,data=data,headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
+def call(path,body=None,content_type='application/json'):
+    data=body if body is None or isinstance(body,bytes) else json.dumps(body,ensure_ascii=False).encode()
+    req=urllib.request.Request(a.base.rstrip('/')+'/api/v1/'+path,data=data,headers={'Authorization':'Bearer '+token,'Content-Type':content_type})
     try:return urllib.request.urlopen(req,timeout=120)
     except urllib.error.HTTPError as e:
         if e.code==429:
-            time.sleep(max(1,int(e.headers.get('Retry-After','60'))));return call(path,body)
+            time.sleep(max(1,int(e.headers.get('Retry-After','60'))));return call(path,body,content_type)
         raise SystemExit('API 错误 '+str(e.code)+': '+e.read().decode('utf-8','replace')) from None
 rid=a.request_id or str(uuid.uuid4());print('requestId =',rid,flush=True)
 body={'requestId':rid,'modelId':a.model,'prompt':a.prompt}
 if a.account:
     body['accountId']=a.account
+if a.generation_type:
+    body['generationType']=a.generation_type
+if a.strength is not None:
+    body['strength']=a.strength
 try:
+    for role,path in [('firstFrame',a.first_frame),('lastFrame',a.last_frame),('sourceImage',a.source_image),('maskImage',a.mask_image)]:
+        if path is None:
+            continue
+        mime,_=mimetypes.guess_type(path)
+        if mime not in ('image/png','image/jpeg','image/webp') or path.stat().st_size>8*1024*1024:
+            p.error('输入图片须为 8 MiB 以内的 PNG、JPEG 或 WebP。')
+        with call('inputs',path.read_bytes(),mime) as response:
+            body[role]=json.load(response)['id']
     with call('jobs',body) as r:job=json.load(r)['job']
     while job['status'] not in ('completed','failed','cancelled'):
         print(job['status'],job['stage'],str(job['step'])+'/'+str(job['totalSteps']),flush=True)

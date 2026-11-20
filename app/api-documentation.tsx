@@ -30,6 +30,7 @@ const routes = Object.entries(API_SPEC.paths).flatMap(([path, methods]) =>
 const sections = [
   { id: 'models', label: '模型', routes: routes.filter(route => route.path.endsWith('/models')) },
   { id: 'accounts', label: '计算账户', routes: routes.filter(route => route.path.endsWith('/accounts')) },
+  { id: 'inputs', label: '输入图片', routes: routes.filter(route => route.path.endsWith('/inputs')) },
   { id: 'jobs', label: '生成任务', routes: routes.filter(route => route.path.includes('/jobs') && !route.path.endsWith('/artifact')) },
   { id: 'artifacts', label: '作品下载', routes: routes.filter(route => route.path.endsWith('/artifact')) },
 ];
@@ -76,6 +77,7 @@ function curlExample(route: typeof routes[number], origin: string, example?: unk
     `curl ${route.method === 'post' ? '-X POST ' : ''}"${url}"`,
     '  -H "Authorization: Bearer $STUDIO_API_KEY"',
     ...(example ? ["  -H 'Content-Type: application/json'", `  --data '${formatted(example).replaceAll("'", "'\\''")}'`] : []),
+    ...(route.path.endsWith('/inputs') ? ["  -H 'Content-Type: image/png'", "  --data-binary @input.png"] : []),
     ...(isDownload ? ['  -OJ'] : []),
   ].join(' \\\n');
 }
@@ -180,6 +182,7 @@ export default function ApiDocumentation({ publicOpenApiUrl }: { publicOpenApiUr
         <Code label="cURL 快速开始" value={curlExample(routes[0], origin)} />
         <ol className={styles.workflow}>
           <li>从<a href="#get-models">模型目录</a>选择模型与尺寸。计算账户默认自动分配，也可以<a href="#get-accounts">查询账户</a>后手动指定。</li>
+          <li>图生任务先<a href="#post-inputs">上传图片</a>，使用返回的素材 ID。</li>
           <li><a href="#post-jobs">提交生成任务</a>，保存自己的 <code>requestId</code>。超时后沿用该 ID 和原参数，避免重复生成。</li>
           <li>每 5–10 秒<a href="#get-jobs-id">查询一次进度</a>。收到 <code>429</code> 时按 <code>Retry-After</code> 等待。</li>
           <li>状态到 <code>completed</code> 后<a href="#get-jobs-id-artifact">下载作品</a>，根据响应类型保存为 PNG 或 MP4。</li>

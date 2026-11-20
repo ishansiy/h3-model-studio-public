@@ -1,3 +1,4 @@
+import { GENERATION_TYPES } from './generation-inputs';
 import { MODEL_CATALOG } from './model-catalog';
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
@@ -56,6 +57,8 @@ const media = {
   'image/png': { schema: { type: 'string', format: 'binary' } },
   'video/mp4': { schema: { type: 'string', format: 'binary' } },
 };
+const inputId = { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'POST /api/v1/inputs 返回的素材 ID。' };
+const uploadImage = { schema: { type: 'string', format: 'binary' } };
 const sizeRule = '宽、高使用模型目录 resolutions 中的配对尺寸，单位像素。省略时使用模型默认值。';
 
 export const API_SPEC = {
@@ -72,7 +75,7 @@ export const API_SPEC = {
   },
   servers: [{ url: '/' }],
   security: [{ BearerAuth: [] }],
-  tags: ['模型', '计算账户', '生成任务', '作品下载'].map(name => ({ name })),
+  tags: ['模型', '计算账户', '输入图片', '生成任务', '作品下载'].map(name => ({ name })),
   paths: {
     '/api/v1/models': {
       get: {
@@ -104,6 +107,21 @@ export const API_SPEC = {
         },
       },
     },
+    '/api/v1/inputs': {
+      post: {
+        operationId: 'uploadInputImage', tags: ['输入图片'], 'x-required-scope': 'jobs:write',
+        summary: '上传任务输入图片',
+        description: '发送单帧图片的原始字节，最大 8 MiB。返回私有素材 ID，可用于首帧、尾帧、原图或蒙版。同一工作室可重复使用该 ID。',
+        requestBody: { required: true, content: { 'image/png': uploadImage, 'image/jpeg': uploadImage, 'image/webp': uploadImage } },
+        responses: {
+          '201': response('已保存的输入图片。', 'InputImage', { id: 'a'.repeat(64), width: 1024, height: 768 }),
+          '400': error('图片为空、损坏或无法完整解码。', 'invalid_image', '图片无法完整解码。'),
+          '413': tooLarge,
+          '415': error('只接受 PNG、JPEG 或 WebP。', 'unsupported_media_type', '请上传 PNG、JPEG 或 WebP 图片。'),
+          ...commonErrors,
+        },
+      },
+    },
     '/api/v1/jobs': {
       get: {
         operationId: 'listJobs', tags: ['生成任务'], 'x-required-scope': 'jobs:read',
@@ -131,6 +149,12 @@ export const API_SPEC = {
               examples: {
                 video: { summary: '生成视频', value: videoExample },
                 image: { summary: '生成图片', value: imageExample },
+                keyframes: { summary: '用上传的首尾帧生成视频', value: {
+                  ...videoExample, generationType: 'frames-to-video', firstFrame: 'a'.repeat(64), lastFrame: 'b'.repeat(64),
+                } },
+                editImage: { summary: '用蒙版重绘图片', value: {
+                  ...imageExample, generationType: 'inpaint', sourceImage: 'a'.repeat(64), maskImage: 'b'.repeat(64), strength: 1,
+                } },
               },
             },
           },
@@ -139,7 +163,7 @@ export const API_SPEC = {
           '200': response('复用已存在的任务。', 'JobSubmissionResponse', { job, replayed: true }, locationHeaders),
           '202': response('新任务已受理，使用 Location 或 job.id 查询。', 'JobSubmissionResponse', { job, replayed: false }, locationHeaders),
           '400': invalidTask,
-          '404': error('未找到所选计算账户。', 'not_found', '请选择已连接的 Kaggle 账户。'),
+          '404': error('未找到所选计算账户或引用的输入图片。', 'input_not_found', '找不到引用的输入图片，请重新上传。'),
           '409': conflict, '413': tooLarge, '415': invalidType, ...commonErrors,
         },
       },
@@ -212,6 +236,7 @@ export const API_SPEC = {
         properties: {
           id: { type: 'string' }, category: { type: 'string', enum: ['video', 'image'] }, name: { type: 'string' },
           description: { type: 'string' },
+          generationTypes: { type: 'array', items: { type: 'string', enum: Object.keys(GENERATION_TYPES) } },
           resolutions: { type: 'array', items: { type: 'object', properties: { value: { type: 'string' }, label: { type: 'string' } } } },
           defaults: { type: 'object', description: '该模型的默认生成参数。' },
         },
@@ -237,6 +262,10 @@ export const API_SPEC = {
         type: 'object', required: ['jobs', 'nextCursor'],
         properties: { jobs: { type: 'array', items: ref('Job') }, nextCursor: { type: ['string', 'null'], format: 'uuid' } },
       },
+      InputImage: {
+        type: 'object', required: ['id', 'width', 'height'],
+        properties: { id: inputId, width: { type: 'integer' }, height: { type: 'integer' } },
+      },
       GenerationRequest: {
         type: 'object', additionalProperties: false, required: ['requestId', 'prompt'],
         properties: {
@@ -247,6 +276,12 @@ export const API_SPEC = {
           prompt: { type: 'string', minLength: 1, maxLength: 6000, description: '视频最多 6000 字符，图片最多 3000 字符。' },
           width: { type: 'integer', description: sizeRule },
           height: { type: 'integer', description: sizeRule },
+          generationType: { type: 'string', enum: Object.keys(GENERATION_TYPES), description: '省略时使用该类别的文生方式。两款视频模型支持首帧和首尾帧，Z-Image-Turbo 支持图生图和局部重绘。' },
+          firstFrame: { ...inputId, description: '首帧图生视频和首尾帧视频必填。' },
+          lastFrame: { ...inputId, description: '首尾帧视频必填。' },
+          sourceImage: { ...inputId, description: '图生图像和局部重绘必填。' },
+          maskImage: { ...inputId, description: '局部重绘必填，与原图同尺寸，白色区域重绘。' },
+          strength: { type: 'number', minimum: 0.2, maximum: 1, description: '重绘幅度。图生图默认 0.6，局部重绘默认 1。' },
           mode: { type: 'string', enum: ['quality', 'turbo'], description: 'H3 原版默认 quality。HyperFlow 只支持 quality，图片省略。' },
           duration: { type: 'number', minimum: 4, maximum: 15, description: '请求视频秒数。H3 为 4–15 秒，1024×768 上限 4.46 秒，HyperFlow 为 5–15 秒。图片省略。帧数对齐后实际时长可能略长。' },
           steps: { type: 'integer', minimum: 1, maximum: 50, description: 'H3 原版 1–50（默认 20）、H3 Turbo 4 或 8（默认 8）、HyperFlow 4／6／8（默认 6）、Z-Image 固定 9。' },

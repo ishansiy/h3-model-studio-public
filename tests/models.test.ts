@@ -12,6 +12,7 @@ import {enqueue,getSession,finishQueueJob} from '../lib/session-queue';
 import {workerApi} from '../lib/session-worker-api';
 import {storedVideoResponse} from '../lib/stored-video';
 import {buildModelNotebook} from '../lib/model-runners';
+import {storeInputImage,inputImageResponse,checkInputImages} from '../lib/input-images';
 import {DUAL_T4_RUNTIME} from '../lib/image-placement';
 const image={category:'image',modelId:'z-image-turbo',prompt:'清晨的海边玻璃小屋',width:512,height:512,steps:9,seed:'12345'};
 const placement=spawnSync('python3',['-c',`import ast,sys
@@ -45,8 +46,34 @@ try{
  const done=await finishQueueJob(db,s,{jobId:id,claimToken:current.claimToken,status:'completed',metadata},key=>bucket.head(key));assert.equal(done.status,'completed');assert.equal(done.stage,'图片已生成');
  const media=await storedVideoResponse(new Request('https://studio.test/artifact'),done,bucket as any);assert.equal(media.headers.get('Content-Type'),'image/png');assert.match(media.headers.get('Content-Disposition')!,/\.png/);assert.deepEqual(Buffer.from(await media.arrayBuffer()),bytes);
  const range=await storedVideoResponse(new Request('https://studio.test/artifact',{headers:{Range:'bytes=0-7'}}),done,bucket as any);assert.equal(range.status,206);assert.equal((await range.arrayBuffer()).byteLength,8);
- const next=await enqueue(db,'owner',a,crypto.randomUUID(),image);assert.equal(next.launch,null);
+ const inputRequest=(body:Buffer)=>new Request('https://studio.test/api/inputs',{method:'POST',headers:{'Content-Type':'image/png'},body:new Uint8Array(body)});
+ const source=await storeInputImage(inputRequest(bytes),'owner',bucket as any);
+ const mask=await sharp({create:{width:512,height:512,channels:3,background:'#ffffff'}}).png().toBuffer();
+ const maskInput=await storeInputImage(inputRequest(mask),'owner',bucket as any);
+ const wrongMask=await sharp({create:{width:256,height:256,channels:3,background:'#ffffff'}}).png().toBuffer();
+ const wrongSize=await storeInputImage(inputRequest(wrongMask),'owner',bucket as any);
+ await assert.rejects(checkInputImages('owner',{sourceImage:source.id,maskImage:wrongSize.id},bucket as any),/尺寸/);
+ const conditional=validateGenerationParams({...image,generationType:'inpaint',sourceImage:source.id,maskImage:maskInput.id});
+ assert.equal(conditional.strength,1);
+ assert.throws(()=>validateGenerationParams({...conditional,maskImage:undefined}),/上传/);
+ assert.throws(()=>validateGenerationParams({...image,generationType:'image-to-image',sourceImage:source.id,strength:0.1}),/重绘幅度/);
+ await checkInputImages('owner',conditional,bucket as any);
+ await assert.rejects(checkInputImages('other',conditional,bucket as any),/找不到/);
+ assert.equal((await inputImageResponse('other',source.id,bucket as any)).status,404);
+ const next=await enqueue(db,'owner',a,crypto.randomUUID(),conditional);assert.equal(next.launch,null);
  const claim2=await(await workerApi(new Request(base+'/poll',{method:'POST',headers,body:'{}'}),['worker',s.id,'poll'],db,bucket as any)).json() as any;
+ assert.equal(claim2.job.params.sourceImage,source.id);
+ const workerInput=(claim:string,role:string,workerHeaders=headers)=>workerApi(
+  new Request(base+`/inputs/${claim2.job.id}/${role}?claim=${claim}`,{headers:workerHeaders}),
+  ['worker',s.id,'inputs',claim2.job.id,role],db,bucket as any);
+ assert.equal((await workerInput('wrong','sourceImage')).status,409);
+ assert.equal((await workerInput(claim2.job.claimToken,'firstFrame')).status,404);
+ assert.equal((await workerInput(claim2.job.claimToken,'sourceImage',{'Authorization':'Bearer '+'b'.repeat(64),'X-H3-Worker':worker})).status,401);
+ const sourceRead=await workerInput(claim2.job.claimToken,'sourceImage');assert.equal(sourceRead.status,200);
+ assert.equal(createHash('sha256').update(Buffer.from(await sourceRead.arrayBuffer())).digest('hex'),source.id);
+ const editFinish=(extra:Record<string,unknown>)=>finishQueueJob(db,s,
+  {jobId:claim2.job.id,claimToken:claim2.job.claimToken,status:'completed',metadata:{...metadata,...extra}},key=>bucket.head(key));
+ await assert.rejects(editFinish({}),/校验证明/);
  const bad=new Request(base+`/artifact/${claim2.job.id}?claim=${claim2.job.claimToken}`,{method:'PUT',headers:{...headers,'Content-Type':'image/png','Content-Length':'5','X-Artifact-SHA256':'a'.repeat(64)},body:'notpng'});assert.equal((await workerApi(bad,['worker',s.id,'artifact',claim2.job.id],db,bucket as any)).status,400);
  await d.query('UPDATE jobs SET stop_requested_at=? WHERE id=?',[Date.now(),claim2.job.id]);assert.equal((await workerApi(new Request(base+`/artifact/${claim2.job.id}?claim=${claim2.job.claimToken}`,{method:'PUT',headers}),['worker',s.id,'artifact',claim2.job.id],db,bucket as any)).status,409);
  const notebook=JSON.parse(buildModelNotebook(image,base,'a'.repeat(64)));assert.ok(notebook.cells.some((c:any)=>String(c.source).includes('ZImagePipeline')));assert.ok(!JSON.stringify(notebook).includes(image.prompt));

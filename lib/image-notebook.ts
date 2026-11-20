@@ -7,14 +7,14 @@ export const ZIMAGE_REVISION='f332072aa78be7aecdf3ee76d5c247082da564a6';
 export const IMAGE_DEPENDENCIES=['diffusers==0.38.0','transformers==4.57.6','accelerate==1.15.0','safetensors==0.8.0','sentencepiece==0.2.1','Pillow==12.0.0'] as const;
 
 const imageLoop=String.raw`
-import sys, subprocess, hashlib, gc
+import sys, subprocess, hashlib, gc, io
 from pathlib import Path
 
 os.environ.setdefault("USE_TF","0")
 os.environ.setdefault("USE_FLAX","0")
 import torch
-from diffusers import ZImagePipeline
-from PIL import Image
+from diffusers import ZImagePipeline, ZImageImg2ImgPipeline, ZImageInpaintPipeline
+from PIL import Image, ImageOps
 if not torch.cuda.is_available():raise RuntimeError("当前计算会话没有可用GPU。")
 `+DUAL_T4_RUNTIME+String.raw`
 
@@ -30,6 +30,63 @@ if _NATIVE_BF16:
 else:pipe=_load_resident_pipeline()
 pipe.vae.enable_tiling()
 _model_load_seconds=time.perf_counter()-_load_started
+class _ResidentImageConditioning:
+    @property
+    def _execution_device(self):return torch.device("cuda:0")
+
+    def _encode_with_room(self, call, *args, **kwargs):
+        parked=list(pipe.transformer.layers[:pipe._resident_split_index])
+        for layer in parked:layer.to("cpu")
+        torch.cuda.empty_cache()
+        try:return call(*args, **kwargs)
+        finally:
+            torch.cuda.empty_cache()
+            for layer in parked:layer.to("cuda:0")
+
+    def prepare_latents(self, *args, **kwargs):
+        return self._encode_with_room(super().prepare_latents, *args, **kwargs)
+
+class _ResidentImg2Img(_ResidentImageConditioning, ZImageImg2ImgPipeline):
+    pass
+
+class _ResidentInpaint(_ResidentImageConditioning, ZImageInpaintPipeline):
+    def prepare_mask_latents(self, *args, **kwargs):
+        return self._encode_with_room(super().prepare_mask_latents, *args, **kwargs)
+
+def _image_pipeline(kind):
+    global _active_pipeline
+    if kind not in _pipelines:
+        if kind=="image-to-image":cls=ZImageImg2ImgPipeline if _NATIVE_BF16 else _ResidentImg2Img
+        elif kind=="inpaint":cls=ZImageInpaintPipeline if _NATIVE_BF16 else _ResidentInpaint
+        else:raise RuntimeError("图片生成方式与执行器不兼容。")
+        components=dict(pipe.components)
+        components["scheduler"]=pipe.scheduler.__class__.from_config(pipe.scheduler.config)
+        _pipelines[kind]=cls(**components)
+    selected=_pipelines[kind]
+    if _NATIVE_BF16 and selected is not _active_pipeline:
+        _active_pipeline.remove_all_hooks()
+        selected.enable_model_cpu_offload(gpu_id=0)
+    _active_pipeline=selected
+    return selected
+
+def _edit_arguments(current,p,kind):
+    if kind=="text-to-image":return {},{}
+    target=(p["width"],p["height"])
+    source=Image.open(io.BytesIO(_session_image(current,"sourceImage"))).convert("RGB")
+    arguments={"image":ImageOps.fit(source,target,method=Image.Resampling.LANCZOS),"strength":p["strength"]}
+    proof={"sourceImage":p["sourceImage"]}
+    if kind=="inpaint":
+        mask=Image.open(io.BytesIO(_session_image(current,"maskImage"))).convert("L")
+        if mask.size!=source.size:raise RuntimeError("蒙版与原图的尺寸必须相同。")
+        mask=ImageOps.fit(mask,target,method=Image.Resampling.NEAREST).point(lambda value:255 if value>=128 else 0)
+        if not mask.getbbox():raise RuntimeError("蒙版没有白色重绘区域。")
+        arguments["mask_image"]=mask
+        proof["maskImage"]=p["maskImage"]
+    return arguments,proof
+
+_pipelines={"text-to-image":pipe}
+_active_pipeline=pipe
+
 _READY=True
 _image_index=0
 _output=Path('/kaggle/working/model-studio');_output.mkdir(parents=True,exist_ok=True)
@@ -56,6 +113,9 @@ try:
             if _JOB_CANCEL.is_set():raise RuntimeError("当前图片任务已取消。")
             _EXECUTING=True;_session_progress("正在生成图片",0)
             for device_id in range(torch.cuda.device_count()):torch.cuda.reset_peak_memory_stats(device_id)
+            kind=p.get("generationType","text-to-image")
+            conditioned,used_images=_edit_arguments(current,p,kind)
+            runner=_image_pipeline(kind)
             call_prompt={"prompt":p["prompt"]}
             _prompt_seconds=0.0
             if not _NATIVE_BF16:
@@ -64,7 +124,7 @@ try:
                 _prompt_seconds=time.perf_counter()-prompt_started
             _session_progress("双GPU生成图片" if not _NATIVE_BF16 else "正在生成图片",0)
             denoise_started=time.perf_counter()
-            result=pipe(**call_prompt,width=p["width"],height=p["height"],num_inference_steps=9,guidance_scale=0.0,generator=torch.Generator("cuda:0").manual_seed(int(p["seed"])),callback_on_step_end=_image_callback,output_type="pil" if _NATIVE_BF16 else "latent")
+            result=runner(**call_prompt,**conditioned,width=p["width"],height=p["height"],num_inference_steps=9,guidance_scale=0.0,generator=torch.Generator("cuda:0").manual_seed(int(p["seed"])),callback_on_step_end=_image_callback,output_type="pil" if _NATIVE_BF16 else "latent")
             _denoise_seconds=time.perf_counter()-denoise_started
             _decode_seconds=0.0
             _decode_parked=not _NATIVE_BF16 and p["width"]*p["height"]>512*512
@@ -97,6 +157,7 @@ try:
             metadata={"category":"image","model_id":"z-image-turbo","model_repo":"Tongyi-MAI/Z-Image-Turbo","model_revision":_IMAGE_REVISION,"runtime_profile":"standard","dtype":str(_DTYPE),"quantized":False,"device":torch.cuda.get_device_name(0),"vae_tiling":True,"resolved_config":{"width":width,"height":height,"steps":9,"seed":str(p["seed"])},"image_validation":{"format":"png","width":width,"height":height,"full_decode_passed":True},"artifact_sha256":digest,"server_reused":_image_index>0,"session_job_index":_image_index,"timings":{"generation_seconds":_generation_seconds,"model_load_seconds":_model_load_seconds if _image_index==0 else 0,"environment_seconds":float(_BOOTSTRAP.get("setupSeconds",0)) if _image_index==0 else 0,"job_seconds":time.perf_counter()-started}}
             metadata.update({"placement":getattr(pipe,"_resident_placement",{"strategy":"native_bf16_model_offload"}),"devices":[torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())],"peak_memory_bytes":[torch.cuda.max_memory_allocated(i) for i in range(torch.cuda.device_count())],"software":{"torch":torch.__version__},"prompt_stage_seconds":_prompt_seconds})
             metadata.update({"denoise_seconds":_denoise_seconds,"decode_seconds":_decode_seconds,"decode_parked":_decode_parked})
+            if used_images:metadata.update({"generation_type":kind,"generation_inputs":used_images,"generation_strength":p["strength"]})
             delivered=_image_finish({"jobId":current["id"],"claimToken":current["claimToken"],"status":"completed","metadata":metadata})
             (path.with_suffix(".json")).write_text(json.dumps(metadata,ensure_ascii=False,indent=2))
             print("MODEL_STUDIO_IMAGE_DELIVERED "+current["id"]+" "+delivered.get("status",""),flush=True)
@@ -107,6 +168,8 @@ try:
         finally:
             _EXECUTING=False
             if 'image' in locals():del image
+            if 'conditioned' in locals():conditioned.clear()
+
             gc.collect();torch.cuda.empty_cache()
         _image_index+=1;_QUEUE_JOB=None;_JOB_CANCEL.clear();_INTERRUPT_AT=None
         _session_progress("等待下一条图像任务",0)

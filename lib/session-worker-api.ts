@@ -1,3 +1,5 @@
+import {inputImageResponse} from './input-images';
+import {generationImages} from './generation-inputs';
 import {readImageUpload} from './image-artifacts';
 import {FixedLengthStream} from './node-runtime';
 import {authenticateWorker,finishQueueJob,workerHeartbeat,workerPoll,QueueError} from './session-queue';
@@ -10,6 +12,15 @@ export async function workerApi(request:Request,path:string[],database:D1Databas
    if(!bucket)throw new QueueError('成片存储尚未配置。',503);
    if(Number(request.headers.get('Content-Length')||0)!==14||await request.text()!=='H3_QUEUE_PROBE')throw new QueueError('探测请求无效。');
    const key=`probe/${s.id}/${s.worker_id||request.headers.get('X-H3-Worker')}`;await bucket.put(key,'H3_QUEUE_PROBE');const object=await bucket.get(key);if(!object||await object.text()!=='H3_QUEUE_PROBE')throw new QueueError('存储验证失败。',503);await bucket.delete(key);return answer({ok:true});
+  }
+  if(path[2]==='inputs'&&path.length===5&&request.method==='GET'){
+   const claim=new URL(request.url).searchParams.get('claim')||'';
+   const row=await database.prepare("SELECT params FROM jobs WHERE owner=? AND session_id=? AND id=? AND claim_token=? AND status='running' AND stop_requested_at IS NULL")
+    .bind(s.owner,s.id,path[3],claim).first<{params:string}>();
+   if(!row||s.stop_requested_at)throw new QueueError('任务不存在或下载租约无效。',409);
+   const id=generationImages(JSON.parse(row.params)).find(([role])=>role===path[4])?.[1];
+   if(!id||!bucket)throw new QueueError('找不到任务的输入图片。',404);
+   return inputImageResponse(s.owner,id,bucket);
   }
   if(path[2]==='artifact'&&path.length===4&&request.method==='PUT'){
    if(!bucket)throw new QueueError('作品存储尚未配置。',503);

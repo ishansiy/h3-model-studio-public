@@ -27,6 +27,7 @@ completed 后下载 PNG 或 MP4，依据 Content-Type 选择扩展名。
 GET  /api/v1/models                         返回模型目录、尺寸、默认参数
 GET  /api/v1/accounts                       返回账户列表，手动指定时使用 id
 POST /api/v1/accounts                       接入或更新账户，沿用原账户 API
+POST /api/v1/inputs                         上传私有输入图片，返回素材 ID
 POST /api/v1/jobs                           创建任务，首次202、重复200
 GET  /api/v1/jobs?limit=20&cursor=<UUID>      按时间倒序分页；末页 nextCursor=null
 GET  /api/v1/jobs/<id>                       已记录的进度、参数、种子、错误和元数据
@@ -45,8 +46,15 @@ HTTP 409 可能返回 no_available_account（无匹配会话）、gpu_quota_unav
 相同 ID 相同参数返回原任务；不同参数/账户返回409，不重复生成。
 seed 可省略：服务端随机生成并保存；重试省略时沿用原种子。
 64位大种子用字符串，避免JSON数字丢精度。
-除 requestId/accountId/category/modelId/prompt/mode/width/height/duration/steps/seed/runtimeProfile
-以外的字段会拒绝，不会悄悄忽略参考图等未接入能力。
+上传图片使用 POST /api/v1/inputs，jobs:write 权限。请求体是 PNG、JPEG 或 WebP 原始文件字节，最大 8 MiB。
+设置 Content-Type 为 image/png、image/jpeg 或 image/webp；例如用 curl --data-binary @input.png。
+在下面参数中填上传响应的 id，输入图片与任务属于同一工作室。
+- text-to-video、text-to-image：默认方式，省略图片字段。
+- image-to-video：H3 或 HyperFlow，填写 firstFrame。
+- frames-to-video：H3 或 HyperFlow，填写 firstFrame、lastFrame。
+- image-to-image：Z-Image-Turbo，填写 sourceImage，可设 strength，默认 0.6。
+- inpaint：Z-Image-Turbo，填写 sourceImage、maskImage。蒙版与原图同尺寸，白色区域重绘，strength 默认 1。
+以上方式使用 generationType 选择。strength 范围 0.2–1。完整字段见公开 OpenAPI。
 
 视频例子（请替换 requestId）：
 {"requestId":"客户端小写UUID","modelId":"hyperflow-h3-flash","prompt":"海边，一只小猫望向夕阳","width":1024,"height":768,"duration":5,"steps":6}

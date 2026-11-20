@@ -24,6 +24,17 @@ def _session_call(action,payload=None):
     _LAST_CONTACT=time.monotonic()
     return data
 
+def _session_image(current, role):
+    import hashlib
+    expected=current["params"].get(role)
+    if not expected:raise RuntimeError("任务缺少输入图片："+role)
+    response=requests.get(_SESSION_API+"/inputs/"+current["id"]+"/"+role,params={"claim":current["claimToken"]},headers={"Authorization":"Bearer "+_SESSION_TOKEN,"X-H3-Worker":_WORKER_ID},timeout=60)
+    response.raise_for_status()
+    data=response.content
+    if len(data)>20*1024*1024 or hashlib.sha256(data).hexdigest()!=expected:
+        raise RuntimeError("输入图片完整性校验失败："+role)
+    return data
+
 def _session_progress(stage,step=0):
     _QUEUE_PROGRESS.update(stage=str(stage),step=int(step))
 
@@ -185,6 +196,7 @@ try:
         PROMPT=p["prompt"];WIDTH=p["width"];HEIGHT=p["height"];DURATION_SECONDS=p["duration"];SEED=int(p["seed"]);STEPS=p["steps"]
         USE_TURBO=p["mode"]=="turbo";SAMPLER_NAME="euler" if USE_TURBO else "res_multistep";GENERATION_MODE=("Turbo" if USE_TURBO else "原版")+" · "+str(STEPS)+"步"
         started=time.perf_counter()
+        files={}
         try:
             if _JOB_CANCEL.is_set():raise RuntimeError("当前任务已取消。")
             if USE_TURBO:
@@ -194,9 +206,19 @@ try:
                 proof_path=FINAL_OUTPUT_DIR/"minimax_h3_attention_proof.json"
                 # A reused server writes the proof once; retain this actual kernel evidence.
                 if _session_index==0 and proof_path.exists():proof_path.unlink()
+            for role in ("firstFrame","lastFrame"):
+                if p.get(role):
+                    _session_progress("读取关键帧",0)
+                    name="studio-"+current["id"]+"-"+role+".png"
+                    folder=COMFY_DIR/"input";folder.mkdir(parents=True,exist_ok=True)
+                    files[role]=name
+                    import io
+                    from PIL import Image, ImageOps
+                    frame=Image.open(io.BytesIO(_session_image(current,role))).convert("RGB")
+                    ImageOps.fit(frame,(WIDTH,HEIGHT),method=Image.Resampling.LANCZOS).save(folder/name,format="PNG")
             _session_progress("准备生成",0)
             _EXECUTING=True
-            path,resolved,prompt_id,history=execute_attempt({"label":current["id"],"width":WIDTH,"height":HEIGHT,"duration":DURATION_SECONDS,"steps":STEPS,"gpu1_clip":_requested_dual})
+            path,resolved,prompt_id,history=execute_attempt({"label":current["id"],"width":WIDTH,"height":HEIGHT,"duration":DURATION_SECONDS,"steps":STEPS,"gpu1_clip":_requested_dual,"images":files})
             _EXECUTING=False
             if _JOB_CANCEL.is_set() or _SESSION_STOP.is_set():raise RuntimeError("当前任务已取消。")
             _session_progress("校验完整视频",STEPS)
@@ -208,6 +230,7 @@ try:
                 proof=json.loads((FINAL_OUTPUT_DIR/"minimax_h3_attention_proof.json").read_text())
                 if proof.get("executed") is not True:raise RuntimeError("缺少实际注意力执行证明。")
             metadata={"prompt":PROMPT,"resolved_config":resolved,"prompt_id":prompt_id,"comfyui_commit":COMFY_COMMIT,"model_repo":MODEL_REPO,"model_revision":MODEL_REVISION,"model_files":list(MODEL_FILES),"runtime_profile":RUNTIME_PROFILE,"runtime_command":command,"attention_proof":proof,"server_reused":_session_index>0,"server_pid":int(PID_PATH.read_text()),"session_job_index":_session_index,"media_validation":validation,"video_sha256":digest,"timings":{"setup_seconds":STAGE_TIMINGS.get("setup_seconds",0) if _session_index==0 else 0,"download_seconds":STAGE_TIMINGS.get("download_seconds",0) if _session_index==0 else 0,"server_seconds":STAGE_TIMINGS.get("server_seconds",0) if _session_index==0 else 0,"generation_seconds":resolved["generation_seconds"],"total_seconds":time.perf_counter()-(RUN_STARTED_AT if _session_index==0 else started)}}
+            if files:metadata.update({"generation_type":p["generationType"],"generation_inputs":{role:p[role] for role in files}})
             _session_upload(current,path,digest)
             delivered=_session_finish({"jobId":current["id"],"claimToken":current["claimToken"],"status":"completed","metadata":metadata})
             (FINAL_OUTPUT_DIR/("h3_session_"+current["id"]+".json")).write_text(json.dumps(metadata,ensure_ascii=False,indent=2))
@@ -219,6 +242,8 @@ try:
             try:requests.post(SERVER_URL+"/free",json={"free_memory":True,"unload_models":False},timeout=10)
             except Exception:pass
             if not cancelled and ("out of memory" in str(exc).lower() or "cuda error" in str(exc).lower()):_SESSION_STOP.set()
+        finally:
+            for name in files.values():(COMFY_DIR/"input"/name).unlink(missing_ok=True)
         _session_index+=1;_QUEUE_JOB=None;_JOB_CANCEL.clear();_INTERRUPT_AT=None
         _session_progress("等待下一条任务",0)
         if not _SESSION_STOP.is_set():_session_take()

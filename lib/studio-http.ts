@@ -1,3 +1,6 @@
+import {checkInputImages,inputImageResponse,storeInputImage} from './input-images';
+import {generationImages} from './generation-inputs';
+import {generationInput} from './generation-api';
 import {MODEL_CATALOG,CATEGORIES} from './model-catalog';
 import {publicUrl,samePublicOrigin} from './public-url';
 import {accountProxyRoute} from './account-proxy';
@@ -130,8 +133,20 @@ export async function dispatchStudio(request:Request,path:string[],owner:string)
       const session=await getSession(db(),path[1]);if(!session||session.owner!==owner)return fail("会话不存在。",404);
       await db().batch([db().prepare("UPDATE gpu_sessions SET status='completed',stop_requested_at=COALESCE(stop_requested_at,?),last_error='用户确认已在Kaggle结束' WHERE id=?").bind(Date.now(),session.id),db().prepare("UPDATE jobs SET status='cancelled',stage='已停止（用户确认在Kaggle结束会话）',stop_requested_at=COALESCE(stop_requested_at,?),updated_at=? WHERE session_id=? AND status IN ('queued','running')").bind(Date.now(),Date.now(),session.id)]);return json({ok:true});
     }
+    if(path[0]==='inputs'){
+      const bucket=env.BUCKET;
+      if(!bucket)return fail('输入图片存储尚未配置。',503);
+      if(path.length===1&&request.method==='POST')return json(await storeInputImage(request,owner,bucket),201);
+      if(path.length===2&&request.method==='GET')return inputImageResponse(owner,path[1],bucket);
+      return fail('接口不存在。',404);
+    }
     if (path[0] === "jobs" && path.length === 1 && request.method === "POST") {
       const value=await queueJson(request);
+      if(generationImages(value || {}).length){
+        if(!env.BUCKET)return fail('输入图片存储尚未配置。',503);
+        const params=generationInput(value);
+        await checkInputImages(owner,params,env.BUCKET);
+      }
       await refreshSchedulingResources(owner,value);
       const result=await storage().atomic(d=>queueGeneration(d,owner,value));
       if(result.launch&&result.session)await launchSession(result.session,result.launch,url.origin);

@@ -1,3 +1,4 @@
+import {generationImages,sessionImageInputsKey} from './generation-inputs';
 import {HYPERFLOW} from './hyperflow-config';
 import {validateGenerationParams as validateParams,generationSteps,jobModel,modelById} from './model-catalog';
 import {samplingSteps,frameCount} from './parameters';
@@ -17,7 +18,13 @@ export async function enqueue(d:QueueStorage,owner:string,a:{id:string;username:
  await d.prepare("INSERT OR IGNORE INTO gpu_sessions(id,owner,account_id,username,status,profile,token_hash,kernel_ref,created_at,expires_at,category,model_id) SELECT ?,?,?,?,'submitting',?,?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE account_id=? AND session_id IS NULL AND status IN ('submitting','queued','running','submission_unknown'))").bind(sid,owner,a.id,a.username,profile,await controlHash(makeToken),`${a.username}/studio-${modelId==='h3'?'h3':modelId==='hyperflow-h3-flash'?'hflash':'zimage'}-${sid.slice(0,12)}`,now,now+43200_000,category,modelId,a.id).run();
  let s=await d.prepare("SELECT * FROM gpu_sessions WHERE owner=? AND account_id=? AND status NOT IN ('completed','failed')").bind(owner,a.id).first<GpuSession>();
  if(!s)throw new QueueError('该账户还有旧版任务，请等远端结束后再创建连续会话。',409);
- if(s.id===sid)launch={token:makeToken,params};
+ if(s.id===sid){
+  launch={token:makeToken,params};
+  await d.prepare('INSERT INTO settings(id,value) VALUES(?,?)').bind(sessionImageInputsKey(s.id),'1').run();
+ }
+ if(generationImages(params).length&&!launch&&!await d.prepare("SELECT id FROM settings WHERE id=? AND value='1'").bind(sessionImageInputsKey(s.id)).first()){
+  throw new QueueError('当前 GPU 会话需要重新启动以支持图片输入。',409);
+ }
  if(s.stop_requested_at||!['submitting','submission_unknown','queued','active'].includes(s.status))throw new QueueError('GPU会话正在退出，请确认结束后再提交。',409);
  if(s.expires_at-now<600_000)throw new QueueError('GPU会话接近最长时限，请结束后重新开启。',409);
  if(jobModel(s)!==modelId)throw new QueueError(`该账户当前会话运行${modelById(jobModel(s))?.name||jobModel(s)}，请等会话结束或先结束会话，再切换模型。`,409);
@@ -58,6 +65,12 @@ export async function finishQueueJob(d:D1Database,s:GpuSession,value:any,hasArti
  const cancelled=!!row.stop_requested_at||!!s.stop_requested_at||value.status==='cancelled';let status=cancelled?'cancelled':value.status==='completed'?'completed':'failed';
  if(status==='completed'){
   const p=JSON.parse(row.params),m=value.metadata,c=m?.resolved_config,v=m?.media_validation;
+  const inputs=generationImages(p);
+  if(inputs.length&&(m?.generation_type!==p.generationType||
+    inputs.some(([role,id])=>m?.generation_inputs?.[role]!==id)||
+    (p.strength!==undefined&&m?.generation_strength!==p.strength))){
+   throw new QueueError('缺少实际使用输入图片的校验证明。',409);
+  }
   if((row.category||'video')==='image'){
    if(!m||m.model_id!==row.model_id||m.category!=='image'||m.runtime_profile!==s.profile||!c||c.width!==p.width||c.height!==p.height||c.steps!==p.steps||String(c.seed)!==String(p.seed)||!m.image_validation?.full_decode_passed||m.image_validation.width!==p.width||m.image_validation.height!==p.height||m.image_validation.format!=='png')throw new QueueError('图片参数或完整解码证明不匹配。',409);
   }else{

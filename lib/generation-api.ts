@@ -1,9 +1,10 @@
+import { IMAGE_ROLES } from './generation-inputs';
 import {IntegrationError,readSmallJson} from './integration-api';
 import {MODEL_CATALOG,modelById,validateGenerationParams} from './model-catalog';
 import {siteMaxSeconds} from './site-options';
 import {randomVideoSeed} from './parameters';
 export const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const INPUT_FIELDS=['requestId','accountId','category','modelId','prompt','mode','width','height','duration','steps','seed','runtimeProfile'];
+const INPUT_FIELDS=['requestId','accountId','category','modelId','prompt','mode','width','height','duration','steps','seed','runtimeProfile','generationType','strength',...IMAGE_ROLES];
 export function generationInput(value:unknown,previous?:{accountId:string;params:any}){
  if(!value||typeof value!=='object'||Array.isArray(value))throw new IntegrationError('请提交生成参数。',400,'invalid_request');
  const v=value as Record<string,unknown>;
@@ -23,13 +24,14 @@ export async function handleGenerationApi(request:Request,path:string[],deps:Dep
  const requestTrace=crypto.randomUUID();let response:Response;
  try{
   const resource=path[0],action=path[2];
-  const methods=resource==='models'&&path.length===1?['GET']:resource==='jobs'&&path.length===1?['GET','POST']:resource==='jobs'&&path.length===2&&UUID.test(path[1])?['GET']:resource==='jobs'&&path.length===3&&UUID.test(path[1])?action==='artifact'?['GET']:['cancel','sync'].includes(action)?['POST']:[]:[];
+  const methods=resource==='inputs'&&path.length===1?['POST']:resource==='models'&&path.length===1?['GET']:resource==='jobs'&&path.length===1?['GET','POST']:resource==='jobs'&&path.length===2&&UUID.test(path[1])?['GET']:resource==='jobs'&&path.length===3&&UUID.test(path[1])?action==='artifact'?['GET']:['cancel','sync'].includes(action)?['POST']:[]:[];
   if(!methods.length)throw new IntegrationError('接口不存在。',404,'not_found');
   if(!methods.includes(request.method)){response=apiReply({error:'请求方法不支持。',code:'method_not_allowed'},405,{Allow:methods.join(', ')});}
   else{
    const scope=resource==='models'?'models:read':request.method==='GET'||action==='sync'?'jobs:read':'jobs:write';
    const owner=await deps.authenticate(request,scope);
    if(resource==='models')response=apiReply({models:MODEL_CATALOG});
+   else if(resource==='inputs')response=await deps.execute(request,path,owner);
    else if(path.length===1&&request.method==='GET'){
     const u=new URL(request.url),n=u.searchParams.get('limit')||'20',cursor=u.searchParams.get('cursor');
     if(!/^[0-9]+$/.test(n)||Number(n)<1||Number(n)>100||(cursor!==null&&!UUID.test(cursor)))throw new IntegrationError('limit 为 1–100，cursor 为上一页返回的任务 UUID。',400,'invalid_pagination');

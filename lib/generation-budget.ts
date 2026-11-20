@@ -1,12 +1,14 @@
+import {defaultGenerationType} from './generation-inputs';
 import { generationSteps, type GenerationParams } from './model-catalog';
 import { frameCount, generationMode } from './parameters';
 
 export type TimingRow = { params: string; metadata: string | null };
-type Workload = { profile: string; mode: string; width: number; height: number; frames: number; steps: number };
+type Workload = { profile: string; mode: string; generationType: string; width: number; height: number; frames: number; steps: number };
 
 function workload(p: GenerationParams): Workload {
   return {
     profile: p.runtimeProfile || 'standard',
+    generationType: p.generationType || defaultGenerationType(p.category || 'video'),
     mode: p.category === 'image' ? 'image' : generationMode(p.mode),
     width: p.width,
     height: p.height,
@@ -46,7 +48,7 @@ export function createGenerationBudget(history: TimingRow[]) {
     const target = workload(p);
     const comparable = samples.filter(({ work }) => work.mode === target.mode && work.profile === target.profile);
     const exact = comparable.filter(({ work }) =>
-      work.width === target.width && work.height === target.height && work.frames === target.frames && work.steps === target.steps);
+      work.generationType === target.generationType && work.width === target.width && work.height === target.height && work.frames === target.frames && work.steps === target.steps);
     const reference = exact.length ? exact : comparable;
     // 未实测的组合使用同模式历史的保守估算。完全没有参考记录时使用调度保留值。
     const fallback = p.category === 'video' ? 1_800 : 600;
