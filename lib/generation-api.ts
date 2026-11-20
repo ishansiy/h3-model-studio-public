@@ -8,13 +8,13 @@ export function generationInput(value:unknown,previous?:{accountId:string;params
  if(!value||typeof value!=='object'||Array.isArray(value))throw new IntegrationError('请提交生成参数。',400,'invalid_request');
  const v=value as Record<string,unknown>;
  if(Object.keys(v).some(k=>!INPUT_FIELDS.includes(k)))throw new IntegrationError('包含未支持的字段，请参考 API 文档。',400,'invalid_request');
- if(typeof v.requestId!=='string'||!UUID.test(v.requestId)||typeof v.accountId!=='string'||!UUID.test(v.accountId))throw new IntegrationError('requestId、accountId 必须为 UUID。',400,'invalid_request');
+ if(typeof v.requestId!=='string'||!UUID.test(v.requestId)||(v.accountId!==undefined&&(typeof v.accountId!=='string'||!UUID.test(v.accountId))))throw new IntegrationError('requestId 必须为小写 UUID，accountId 可省略或填写小写 UUID。',400,'invalid_request');
  const model=modelById(String(v.modelId??(v.category==='image'?'z-image-turbo':'h3')));
  if(!model)throw new IntegrationError('模型不存在。',400,'invalid_parameters');
  let params;
  try{params=validateGenerationParams({...model.defaults,...(model.id==='h3'?{duration:Math.min(model.defaults.duration,siteMaxSeconds(Number(v.width??model.defaults.width),Number(v.height??model.defaults.height))),steps:v.mode==='turbo'?8:model.defaults.steps}:{}),...v,seed:v.seed===undefined?(previous?.params.seed??randomVideoSeed()):v.seed});}
  catch(e){throw new IntegrationError((e as Error).message,400,'invalid_parameters');}
- if(previous&&(previous.accountId!==v.accountId||JSON.stringify(previous.params)!==JSON.stringify(params)))throw new IntegrationError('requestId 已用于不同参数，请使用新的 UUID。',409,'idempotency_conflict');
+ if(previous&&((v.accountId!==undefined&&previous.accountId!==v.accountId)||JSON.stringify(previous.params)!==JSON.stringify(params)))throw new IntegrationError('requestId 已用于不同参数，请使用新的 UUID。',409,'idempotency_conflict');
  return {requestId:v.requestId,accountId:v.accountId,...params};
 }
 type Deps={authenticate:(r:Request,scope:string)=>Promise<string>;find:(owner:string,id:string)=>Promise<{accountId:string;params:any}|null>;list:(owner:string,limit:number,cursor:string|null)=>Promise<{jobs:any[];nextCursor:string|null}>;execute:(r:Request,path:string[],owner:string)=>Promise<Response>};
@@ -36,11 +36,8 @@ export async function handleGenerationApi(request:Request,path:string[],deps:Dep
     response=apiReply(await deps.list(owner,Number(n),cursor));
    }else if(path.length===1&&request.method==='POST'){
     const raw=await readSmallJson(request,32768);
-    const id=typeof raw?.requestId==='string'&&UUID.test(raw.requestId)?raw.requestId:null;
-    const old=id?await deps.find(owner,id):null;
-    const input=generationInput(raw,old??undefined);
-    response=old?await deps.execute(new Request(request.url,{method:'GET'}),['jobs',input.requestId],owner):await deps.execute(new Request(request.url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(input)}),['jobs'],owner);
-    if(response.ok){const data:any=await response.json();generationInput(raw,{accountId:data.job.accountId,params:data.job.params});response=apiReply({...data,replayed:!!old},old?200:202,{Location:`/api/v1/jobs/${input.requestId}`});}
+    response=await deps.execute(new Request(request.url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(raw)}),['jobs'],owner);
+    if(response.ok){const data:any=await response.json();response=apiReply(data,data.replayed?200:202,{Location:`/api/v1/jobs/${data.job.id}`});}
    }else{
     if(path.length===3){const existing=await deps.find(owner,path[1]);if(!existing)throw new IntegrationError('任务不存在。',404,'not_found');}
     response=await deps.execute(request,action==='cancel'?['jobs',path[1],'stop']:path,owner);

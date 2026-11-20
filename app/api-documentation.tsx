@@ -176,10 +176,10 @@ export default function ApiDocumentation({ publicOpenApiUrl }: { publicOpenApiUr
       </div>
       <section id="quickstart" className={styles.intro}>
         <h2>身份验证</h2>
-        <p>在请求头中传入 <code>Authorization: Bearer 你的工作室 API 密钥</code>。按所调用的接口为密钥勾选权限。运行示例前，请换成自己的密钥和账户或任务 ID。</p>
+        <p>在请求头中传入 <code>Authorization: Bearer 你的工作室 API 密钥</code>。按所调用的接口为密钥勾选权限。运行示例前，请换成自己的密钥和任务 ID。</p>
         <Code label="cURL 快速开始" value={curlExample(routes[0], origin)} />
         <ol className={styles.workflow}>
-          <li><a href="#get-accounts">读取计算账户</a>，取账户 ID，并从<a href="#get-models">模型目录</a>选择模型与尺寸。</li>
+          <li>从<a href="#get-models">模型目录</a>选择模型与尺寸。计算账户默认自动分配，也可以<a href="#get-accounts">查询账户</a>后手动指定。</li>
           <li><a href="#post-jobs">提交生成任务</a>，保存自己的 <code>requestId</code>。超时后沿用该 ID 和原参数，避免重复生成。</li>
           <li>每 5–10 秒<a href="#get-jobs-id">查询一次进度</a>。收到 <code>429</code> 时按 <code>Retry-After</code> 等待。</li>
           <li>状态到 <code>completed</code> 后<a href="#get-jobs-id-artifact">下载作品</a>，根据响应类型保存为 PNG 或 MP4。</li>

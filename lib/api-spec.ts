@@ -24,21 +24,21 @@ const invalidType = error('提交的请求体必须使用 application/json。', 
 const tooLarge = error('请求体超过该接口的字节上限。', 'body_too_large', '请求内容过大。');
 const taskMissing = error('找不到该工作室的任务。', 'not_found', '任务不存在。');
 const invalidTask = error('请求字段、UUID、模型或参数组合不合法。', 'invalid_parameters', '请选择支持的生成参数。');
-const conflict = error('请求 ID 与既有任务参数不一致，或当前 GPU 会话条件不允许排队。', 'conflict', '请核对 requestId、模型和会话状态。');
+const conflict = error('请求 ID 与既有任务参数不一致、暂无可分配的账号，或当前 GPU 会话条件不允许排队。', 'conflict', '请核对 requestId、模型和会话状态。');
 const commonErrors = { '401': unauthorized, '403': forbidden, '429': rateLimited, '503': unavailable };
 
 const jobId = '123e4567-e89b-42d3-a456-426614174000';
 const accountId = '123e4567-e89b-42d3-a456-426614174001';
 const videoExample = {
-  requestId: jobId, accountId, category: 'video', modelId: 'hyperflow-h3-flash',
+  requestId: jobId, category: 'video', modelId: 'hyperflow-h3-flash',
   prompt: '一只小黄鸭在水面缓缓漂浮。', width: 512, height: 288, duration: 5, steps: 4,
 };
 const imageExample = {
-  requestId: '123e4567-e89b-42d3-a456-426614174002', accountId, category: 'image', modelId: 'z-image-turbo',
+  requestId: '123e4567-e89b-42d3-a456-426614174002', category: 'image', modelId: 'z-image-turbo',
   prompt: '阳光下的一只白色小猫。', width: 1024, height: 1024, steps: 9,
 };
 const accountExample = { id: accountId, name: '创作账户', username: 'example_user', hint: '…1234', created_at: 1795080000000 };
-const { requestId: _requestId, accountId: _accountId, ...sampleParams } = videoExample;
+const { requestId: _requestId, ...sampleParams } = videoExample;
 const job = {
   id: jobId, accountId, category: 'video', modelId: 'hyperflow-h3-flash', artifactMime: 'video/mp4',
   status: 'queued', stage: '等待会话处理', step: 0, totalSteps: 4,
@@ -66,7 +66,7 @@ export const API_SPEC = {
     description: [
       'GET /api/v1/openapi.json 可直接读取规范。以下业务接口使用 Authorization: Bearer <工作室 API 密钥>。',
       '在 /integrations/keys 创建密钥，使用各接口的 x-required-scope 勾选权限。密钥有效期 90 天，每个密钥每分钟最多 20 次请求。',
-      '典型流程：读取模型和账户 → 生成小写 UUID → 提交 → 每 5–10 秒查询任务 → completed 后下载。提交超时先按原 UUID 查询，重试沿用同一 UUID 和参数。',
+      '典型流程：读取模型 → 生成小写 UUID → 提交 → 每 5–10 秒查询任务 → completed 后下载。提交超时先按原 UUID 查询，重试沿用同一 UUID 和参数。',
       '429 时按 Retry-After 等待。任务执行失败体现在 job.status=failed，并可查看 job.error。',
     ].join('\n\n'),
   },
@@ -86,7 +86,7 @@ export const API_SPEC = {
       get: {
         operationId: 'listAccounts', tags: ['计算账户'], 'x-required-scope': 'accounts:read',
         summary: '查询已接入账户',
-        description: '从 accounts[].id 取生成任务需要的 accountId。响应只含账户标识、名称、用户名、密钥提示和接入时间。',
+        description: '手动指定账户时，从 accounts[].id 取 accountId。响应只含账户标识、名称、用户名、密钥提示和接入时间。',
         responses: { '200': response('已接入账户列表。', 'AccountsResponse', { accounts: [accountExample] }), ...commonErrors },
       },
       post: {
@@ -122,7 +122,7 @@ export const API_SPEC = {
       post: {
         operationId: 'createJob', tags: ['生成任务'], 'x-required-scope': 'jobs:write',
         summary: '提交图像或视频任务',
-        description: '请求体最多 32 KiB。requestId 由客户端生成。相同 ID 与参数可重试，相同 ID 改参数返回 409。seed 省略时由服务端分配，最终生效参数见 job.params。202 表示任务已受理，后续需查询状态。同账户同模型同运行方案可以复用 GPU 会话。',
+        description: '请求体最多 32 KiB。省略 accountId 时自动分配账号。requestId 由客户端生成。相同 ID 与参数可重试，相同 ID 改参数返回 409。seed 省略时由服务端分配，最终生效参数见 job.params。202 表示任务已受理，后续需查询状态。同账户同模型同运行方案可以复用 GPU 会话。',
         requestBody: {
           required: true,
           content: {
@@ -238,10 +238,10 @@ export const API_SPEC = {
         properties: { jobs: { type: 'array', items: ref('Job') }, nextCursor: { type: ['string', 'null'], format: 'uuid' } },
       },
       GenerationRequest: {
-        type: 'object', additionalProperties: false, required: ['requestId', 'accountId', 'prompt'],
+        type: 'object', additionalProperties: false, required: ['requestId', 'prompt'],
         properties: {
           requestId: { type: 'string', format: 'uuid', description: '客户端生成的小写 UUID。同一业务请求重试沿用该值。' },
-          accountId: { type: 'string', format: 'uuid', description: 'GET /api/v1/accounts 返回的 id。' },
+          accountId: { type: 'string', format: 'uuid', description: '可省略，由工作室自动分配。指定时使用 GET /api/v1/accounts 返回的 id。' },
           category: { type: 'string', enum: ['video', 'image'], description: '省略时从模型推断。category=image 且省略模型时默认 z-image-turbo。' },
           modelId: { type: 'string', enum: ['h3', 'hyperflow-h3-flash', 'z-image-turbo'], description: '必须与类别匹配。省略时视频默认 h3。' },
           prompt: { type: 'string', minLength: 1, maxLength: 6000, description: '视频最多 6000 字符，图片最多 3000 字符。' },

@@ -3,7 +3,7 @@
 import argparse, getpass, json, pathlib, time, urllib.request, urllib.error, uuid
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--base',required=True,help='工作室 HTTPS 地址')
-p.add_argument('--account',required=True,help='GET /api/v1/accounts 返回的账户 UUID')
+p.add_argument('--account',help='可选的账户 UUID，省略时自动分配')
 p.add_argument('--model',default='hyperflow-h3-flash',choices=['h3','hyperflow-h3-flash','z-image-turbo'])
 p.add_argument('--prompt',required=True)
 p.add_argument('--output',required=True)
@@ -21,7 +21,9 @@ def call(path,body=None):
             time.sleep(max(1,int(e.headers.get('Retry-After','60'))));return call(path,body)
         raise SystemExit('API 错误 '+str(e.code)+': '+e.read().decode('utf-8','replace')) from None
 rid=a.request_id or str(uuid.uuid4());print('requestId =',rid,flush=True)
-body={'requestId':rid,'accountId':a.account,'modelId':a.model,'prompt':a.prompt}
+body={'requestId':rid,'modelId':a.model,'prompt':a.prompt}
+if a.account:
+    body['accountId']=a.account
 try:
     with call('jobs',body) as r:job=json.load(r)['job']
     while job['status'] not in ('completed','failed','cancelled'):

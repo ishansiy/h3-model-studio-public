@@ -17,7 +17,7 @@ accounts:read 账户列表；accounts:write 接入或更新账户。
 这是服务端接入 API；不对任意第三方网页开放跨域访问。
 
 二、典型流程
-先通过模型接口读取尺寸和默认值，在账户接口读取 accountId。
+先通过模型接口读取尺寸和默认值。省略 accountId 时自动分配计算账户。
 客户端生成小写 UUID 作为 requestId，再提交任务。
 从 Location 或 job.id 查询进度，每 5–10 秒一次。
 completed 后下载 PNG 或 MP4，依据 Content-Type 选择扩展名。
@@ -25,7 +25,7 @@ completed 后下载 PNG 或 MP4，依据 Content-Type 选择扩展名。
 
 三、接口
 GET  /api/v1/models                         返回模型目录、尺寸、默认参数
-GET  /api/v1/accounts                       返回账户列表，取 id 作为 accountId
+GET  /api/v1/accounts                       返回账户列表，手动指定时使用 id
 POST /api/v1/accounts                       接入或更新账户，沿用原账户 API
 POST /api/v1/jobs                           创建任务，首次202、重复200
 GET  /api/v1/jobs?limit=20&cursor=<UUID>      按时间倒序分页；末页 nextCursor=null
@@ -37,7 +37,9 @@ GET  /api/v1/jobs/<id>/artifact?download=1   下载作品，同样需要Bearer�
 
 四、创建任务
 Content-Type: application/json；最大32KiB。
-requestId 为小写 UUID（由客户端生成），accountId 为已有账户 UUID。
+requestId 为客户端生成的小写 UUID。accountId 可省略，也可填写已接入的账户 UUID。
+自动分配先复用空闲的匹配会话，再选空闲账号并行执行，最后选排队较短的匹配会话。
+近期已确认无权限或 GPU 额度耗尽的账户会暂时跳过。无可用账号时返回 HTTP 409（no_available_account）。
 同一次业务请求重试必须沿用 requestId，不要每次换 ID。
 相同 ID 相同参数返回原任务；不同参数/账户返回409，不重复生成。
 seed 可省略：服务端随机生成并保存；重试省略时沿用原种子。
@@ -45,11 +47,11 @@ seed 可省略：服务端随机生成并保存；重试省略时沿用原种子
 除 requestId/accountId/category/modelId/prompt/mode/width/height/duration/steps/seed/runtimeProfile
 以外的字段会拒绝，不会悄悄忽略参考图等未接入能力。
 
-视频例子（请替换两个 UUID）：
-{"requestId":"客户端小写UUID","accountId":"已有账户UUID","modelId":"hyperflow-h3-flash","prompt":"海边，一只小猫望向夕阳","width":1024,"height":768,"duration":5,"steps":6}
+视频例子（请替换 requestId）：
+{"requestId":"客户端小写UUID","modelId":"hyperflow-h3-flash","prompt":"海边，一只小猫望向夕阳","width":1024,"height":768,"duration":5,"steps":6}
 
 图像例子：
-{"requestId":"客户端小写UUID","accountId":"已有账户UUID","category":"image","modelId":"z-image-turbo","prompt":"阳光下的白色小猫","width":1024,"height":1024,"steps":9}
+{"requestId":"客户端小写UUID","category":"image","modelId":"z-image-turbo","prompt":"阳光下的白色小猫","width":1024,"height":1024,"steps":9}
 
 支持的模型与限制：
 - h3：视频默认模型，quality默认20步、最高50步；turbo仅4/8步。

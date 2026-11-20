@@ -51,6 +51,11 @@ export class NodeDatabase{
   this.ready = Promise.resolve();
  }
  prepare(sql:string){return new NodeStatement(this,sql);}
+ async atomic<T>(fn:(db:Pick<D1Database,'prepare'>)=>Promise<T>){
+  return this.transaction(client=>fn({
+   prepare:sql=>new NodeStatement(this,sql,(text,values)=>this.execute(text,values,client)) as unknown as D1PreparedStatement,
+  }));
+ }
  async transaction<T>(fn:(client?:PoolClient)=>Promise<T>){const prior=this.tail;let release!:()=>void;this.tail=new Promise(r=>release=r);await prior;let client:PoolClient|undefined;let began=false;try{await this.ready;if(this.pool){client=await this.pool.connect();await client.query('BEGIN');await client.query("SELECT pg_advisory_xact_lock(731042024)");}else this.sqlite!.exec('BEGIN IMMEDIATE');began=true;const value=await fn(client);if(client)await client.query('COMMIT');else this.sqlite!.exec('COMMIT');return value;}catch(e){if(client)await client.query('ROLLBACK').catch(()=>{});else if(began)this.sqlite!.exec('ROLLBACK');throw e;}finally{client?.release();release();}}
  async execute(sql:string,values:any[],client?:PoolClient):Promise<Result>{await this.ready;if(this.pool){const r=await (client||this.pool).query(postgresSql(sql),values);return {results:r.rows||[],success:true,meta:{changes:r.rowCount||0}};}const statement=this.sqlite!.prepare(sql);if(/^\s*(SELECT|WITH|PRAGMA)\b/i.test(sql)||/\bRETURNING\b/i.test(sql)){const rows=statement.all(...values);return{results:rows,success:true,meta:{changes:/^\s*SELECT/i.test(sql)?0:rows.length}};}const r=statement.run(...values);return{results:[],success:true,meta:{changes:Number(r.changes)}};}
  async query(sql:string,values:any[]=[]){return /^\s*(SELECT|PRAGMA)\b/i.test(sql)?this.execute(sql,values):this.transaction(c=>this.execute(sql,values,c));}
@@ -62,8 +67,12 @@ export class NodeDatabase{
  }
 }
 class NodeStatement{
- values:any[]=[];constructor(public db:NodeDatabase,public sql:string){}bind(...v:any[]){const s=new NodeStatement(this.db,this.sql);s.values=v.map(x=>x===undefined?null:x);return s;}
- async run(){return this.db.query(this.sql,this.values);}async all<T=any>(){return this.db.query(this.sql,this.values) as Promise<Result&{results:T[]}>;}async first<T=any>(column?:string):Promise<T|null>{const r=await this.db.query(this.sql,this.values);const row=r.results[0];return row?(column?row[column]:row):null;}
+ values:any[]=[];
+ constructor(public db:NodeDatabase,public sql:string,private execute?: (sql:string,values:any[])=>Promise<Result>){}
+ bind(...v:any[]){const s=new NodeStatement(this.db,this.sql,this.execute);s.values=v.map(x=>x===undefined?null:x);return s;}
+ async run(){return this.execute?this.execute(this.sql,this.values):this.db.query(this.sql,this.values);}
+ async all<T=any>(){return this.run() as Promise<Result&{results:T[]}>;}
+ async first<T=any>(column?:string):Promise<T|null>{const r=await this.run();const row=r.results[0];return row?(column?row[column]:row):null;}
 }
 const MAX_OBJECT_SIZE = 100*1024*1024;
 type ObjectHead = {size:number; http_metadata:string; sha:string};

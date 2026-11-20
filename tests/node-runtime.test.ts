@@ -14,6 +14,9 @@ import {account,encrypt,job} from '../lib/store';
 import {NodeDatabase,NodeBucket,postgresSql,validateEnvironment} from '../lib/node-runtime';
 import {enqueue,workerPoll,cancelQueuedJob,getSession,workerHeartbeat,finishQueueJob} from '../lib/session-queue';
 import {frameCount} from '../lib/parameters';
+import {queueGeneration} from '../lib/account-scheduler';
+import {resourcesCacheKey} from '../lib/resources';
+import {IntegrationError} from '../lib/integration-api';
 assert.equal(publicUrl(new Request('http://0.0.0.0:3000/api/access',{headers:{host:'localhost:8791'}})).origin,'http://localhost:8791');process.env.PUBLIC_BASE_URL='https://studio.example.com';assert.equal(publicRequest(new Request('http://0.0.0.0:3000/api/access')).url,'https://studio.example.com/api/access');delete process.env.PUBLIC_BASE_URL;
 const renderOrigin = 'https://studio-test.onrender.com';
 const domainOrigin = 'https://studio.example.com';
@@ -74,6 +77,47 @@ const proxyAccount=await persistVerifiedAccount(db,'owner','proxyuser','测试',
  await cancelQueuedJob(db,'owner','j2');assert.equal((await d.prepare('SELECT status FROM jobs WHERE id=?').bind('j2').first<any>()).status,'cancelled');
  await d.query("UPDATE jobs SET metadata=json_set(COALESCE(metadata,'{}'),'$.termination',json(?)) WHERE id=?",[JSON.stringify({source:'test'}),'j1']);assert.equal(JSON.parse((await d.prepare('SELECT metadata FROM jobs WHERE id=?').bind('j1').first<any>()).metadata).termination.source,'test');
  assert.equal((await getSession(db,first.session!.id))!.profile,'standard');
+}
+async function exerciseScheduler(d:NodeDatabase) {
+ const owner='scheduler',now=Date.now();
+ const ids=['a','b','c','d','e'].map(letter=>`00000000-0000-4000-8000-00000000000${letter}`);
+ const [a,b,invalid,exhausted,other]=ids;
+ for(const id of ids){
+  await d.query('INSERT INTO accounts(id,owner,name,username,cipher,hint,created_at) VALUES(?,?,?,?,?,?,?)',
+   [id,id===other?'another-owner':owner,id,id.slice(-1),'fixture','fixture',now]);
+ }
+ for(const [id,status,quotas] of [[invalid,'invalid',[]],[exhausted,'connected',[{resource:'GPU',remainingHours:0}]]] as const){
+  await d.query('INSERT INTO settings(id,value) VALUES(?,?)',[resourcesCacheKey(owner,id),JSON.stringify({checkedAt:now,status,quotas})]);
+ }
+ const input=()=>({requestId:crypto.randomUUID(),modelId:'hyperflow-h3-flash',prompt:'海边',width:608,height:352});
+ const submit=(value:object)=>d.atomic(tx=>queueGeneration(tx,owner,value,now));
+ const [first,second]=await Promise.all([submit(input()),submit(input())]);
+ assert.deepEqual(new Set([first.row.account_id,second.row.account_id]),new Set([a,b]));
+ assert.ok(first.launch&&second.launch);
+ const request=input();
+ const [created,replayed]=await Promise.all([submit(request),submit(request)]);
+ assert.equal(created.replayed,false);
+ assert.equal(replayed.replayed,true);
+ assert.equal(created.row.account_id,replayed.row.account_id);
+ assert.equal(created.row.params,replayed.row.params);
+ assert.equal(created.launch,null);
+ assert.equal(replayed.launch,null);
+ const code=(value:string)=>(e:unknown)=>e instanceof IntegrationError&&e.status===409&&e.code===value;
+ await assert.rejects(submit({...request,prompt:'不同提示词'}),code('idempotency_conflict'));
+ await assert.rejects(submit({...input(),modelId:'h3'}),code('no_available_account'));
+ await assert.rejects(submit({...input(),modelId:'z-image-turbo',width:1024,height:1024}),code('no_available_account'));
+ assert.equal(Number(await d.prepare('SELECT count(*) AS n FROM jobs WHERE owner=?').bind(owner).first('n')),3);
+ assert.equal(Number(await d.prepare('SELECT count(*) AS n FROM gpu_sessions WHERE owner=?').bind(owner).first('n')),2);
+
+ await d.query("UPDATE jobs SET status='completed' WHERE owner=? AND account_id=?",[owner,b]);
+ await d.query("UPDATE gpu_sessions SET status='active' WHERE owner=? AND account_id=?",[owner,b]);
+ const reused=await submit(input());
+ assert.equal(reused.row.account_id,b);
+ assert.equal(reused.launch,null);
+ await d.query("UPDATE gpu_sessions SET status='stopping',stop_requested_at=? WHERE owner=? AND account_id=?",[now,owner,b]);
+ assert.equal((await submit(input())).row.account_id,a);
+ const specified=await submit({...input(),accountId:invalid});
+ assert.equal(specified.row.account_id,invalid);
 }
 try {
  const file=join(dir,'test.db');
@@ -148,6 +192,11 @@ try {
  } finally {
   await postgres.close();
  }
+
+ for(const fixture of [new NodeDatabase('',':memory:'),new NodeDatabase('','',pglitePool(new PGlite()))]){
+  try{await exerciseScheduler(fixture);}finally{await fixture.close();}
+ }
+ console.log('通过：SQLite 与 PostgreSQL 并发任务分流、会话复用、不可用账户过滤和重试去重。');
 
  process.env.RENDER='true';
  process.env.ALLOW_PERSISTENT_SQLITE='true';

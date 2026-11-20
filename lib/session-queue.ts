@@ -6,9 +6,10 @@ export type GpuSession={id:string;owner:string;account_id:string;username:string
 export const SESSION_IDLE_MS=300_000;
 export const liveSession=(s:GpuSession)=>!['completed','failed'].includes(s.status);
 export class QueueError extends Error{constructor(message:string,public status=400){super(message);}}
-export const getSession=(d:D1Database,id:string)=>d.prepare('SELECT * FROM gpu_sessions WHERE id=?').bind(id).first<GpuSession>();
+type QueueStorage=Pick<D1Database,'prepare'>;
+export const getSession=(d:QueueStorage,id:string)=>d.prepare('SELECT * FROM gpu_sessions WHERE id=?').bind(id).first<GpuSession>();
 export const sessionView=(s:GpuSession)=>({id:s.id,accountId:s.account_id,category:s.category||'video',modelId:jobModel(s),status:s.status,profile:s.profile,kernelRef:s.kernel_ref,version:s.version,createdAt:s.created_at,heartbeatAt:s.heartbeat_at,idleSince:s.idle_since,idleTimeoutSeconds:SESSION_IDLE_MS/1000,stopRequestedAt:s.stop_requested_at,error:s.last_error});
-export async function enqueue(d:D1Database,owner:string,a:{id:string;username:string;name:string},id:string,input:unknown,now=Date.now()){
+export async function enqueue(d:QueueStorage,owner:string,a:{id:string;username:string;name:string},id:string,input:unknown,now=Date.now()){
  const params=validateParams(input),profile=params.runtimeProfile||'standard';const modelId=params.modelId,category=params.category;
  if(!['standard','ck','fp16'].includes(profile))throw new QueueError('请选择原精度、混合精度或注意力加速计算方案。');
  const existing=await d.prepare('SELECT * FROM jobs WHERE owner=? AND id=?').bind(owner,id).first<any>();if(existing)return {row:existing,session:existing.session_id?await getSession(d,existing.session_id):null,launch:null};
@@ -17,7 +18,7 @@ export async function enqueue(d:D1Database,owner:string,a:{id:string;username:st
  let s=await d.prepare("SELECT * FROM gpu_sessions WHERE owner=? AND account_id=? AND status NOT IN ('completed','failed')").bind(owner,a.id).first<GpuSession>();
  if(!s)throw new QueueError('该账户还有旧版任务，请等远端结束后再创建连续会话。',409);
  if(s.id===sid)launch={token:makeToken,params};
- if(!['submitting','submission_unknown','queued','active'].includes(s.status))throw new QueueError('GPU会话正在退出，请确认结束后再提交。',409);
+ if(s.stop_requested_at||!['submitting','submission_unknown','queued','active'].includes(s.status))throw new QueueError('GPU会话正在退出，请确认结束后再提交。',409);
  if(s.expires_at-now<600_000)throw new QueueError('GPU会话接近最长时限，请结束后重新开启。',409);
  if(jobModel(s)!==modelId)throw new QueueError(`该账户当前会话运行${modelById(jobModel(s))?.name||jobModel(s)}，请等会话结束或先结束会话，再切换模型。`,409);
  if(s.profile!==profile)throw new QueueError(`当前GPU会话使用${s.profile==='ck'?'注意力加速':s.profile==='fp16'?'混合精度加速':'原精度计算'}。请沿用此方案，或结束会话后再切换。`,409);

@@ -46,6 +46,14 @@ try{
  assert.equal((await d.prepare('SELECT COUNT(*) AS n FROM gpu_sessions').first<any>())!.n,1);
  assert.equal((await d.prepare('SELECT COUNT(*) AS n FROM jobs WHERE id=?').bind(id).first<any>())!.n,1);
  assert.equal((await run('jobs/'+id)).status,200);
+ const {accountId: _explicitAccount, ...automatic}={...input,requestId:crypto.randomUUID()};
+ const assigned=await run('jobs','POST',automatic);assert.equal(assigned.status,202);
+ const assignedBody=await assigned.json() as {job:{accountId:string}};
+ assert.equal(assignedBody.job.accountId,aid);
+ const assignedJob=await run('jobs/'+automatic.requestId);
+ assert.equal(assignedJob.status,200);
+ const assignedDetails=await assignedJob.json() as {job:{sessionId:string}};
+ assert.equal(assignedDetails.job.sessionId,warm.session!.id);
  assert.equal((await run('jobs?limit=1')).status,200);
  assert.equal((await run('jobs?limit=1000')).status,400);
  assert.equal((await run('jobs/'+crypto.randomUUID()+'/sync','POST')).status,404);
@@ -60,6 +68,7 @@ try{
  const now=Date.now()+120000;const authReq=req('models','GET',undefined,token);for(let i=0;i<20;i++)await authenticateIntegration(authReq,d,now,'models:read');await assert.rejects(authenticateIntegration(authReq,d,now,'models:read'),(e:any)=>e.status===429);
  const document=await spec().json() as typeof import('../lib/api-spec').API_SPEC;
  assert.equal(document.openapi,'3.1.0');
+ assert.deepEqual(document.components.schemas.GenerationRequest.required,['requestId','prompt']);
  const operations=Object.values(document.paths).flatMap(path=>Object.values(path as Record<string,{'operationId':string;'x-required-scope':string}>));
  assert.equal(operations.length,9);
  for(const operation of operations)parseScopes([operation['x-required-scope']]);

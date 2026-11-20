@@ -1,13 +1,14 @@
 import {MODEL_CATALOG,CATEGORIES} from './model-catalog';
 import {publicUrl,samePublicOrigin} from './public-url';
 import {accountProxyRoute} from './account-proxy';
-import {enqueue,getSession,sessionView,stopGpuSession,cancelQueuedJob,QueueError} from "./session-queue";
+import {getSession,sessionView,stopGpuSession,cancelQueuedJob,QueueError} from "./session-queue";
+import {queueGeneration} from './account-scheduler';
 import {launchSession,syncGpuSession,queueVideoResponse} from "./gpu-session-service";
 import {workerApi,queueJson} from "./session-worker-api";
 import {modelCacheSources} from "./model-cache";
 import {requestJobStop,confirmExternalStop} from "./job-stop";
 import {explicitSessionId, controlHash, createControlToken, readControl} from "./job-control";
-import { env } from "./node-runtime";
+import { env, storage } from "./node-runtime";
 import { getWorkspaceOwner } from "./workspace-runtime";
 import { account, bootstrap, db, decrypt, accountCredential, job, jobView, saveAccount, type Account, type Job } from "./store";
 import { cleanError, findFile, kaggle, KaggleError, liveProgress, output, queryFor } from "./kaggle";
@@ -140,11 +141,11 @@ export async function dispatchStudio(request:Request,path:string[],owner:string)
       await db().batch([db().prepare("UPDATE gpu_sessions SET status='completed',stop_requested_at=COALESCE(stop_requested_at,?),last_error='用户确认已在Kaggle结束' WHERE id=?").bind(Date.now(),session.id),db().prepare("UPDATE jobs SET status='cancelled',stage='已停止（用户确认在Kaggle结束会话）',stop_requested_at=COALESCE(stop_requested_at,?),updated_at=? WHERE session_id=? AND status IN ('queued','running')").bind(Date.now(),Date.now(),session.id)]);return json({ok:true});
     }
     if (path[0] === "jobs" && path.length === 1 && request.method === "POST") {
-      const value=await queueJson(request);if(typeof value.requestId!=="string"||!/^[a-f0-9-]{36}$/.test(value.requestId))return fail("任务请求标识无效。");
-      const a=await account(owner,value.accountId);if(!a)return fail("请选择已连接的Kaggle账户。",404);
-      const result=await enqueue(db(),owner,a,value.requestId,value);
+      const value=await queueJson(request);
+      const result=await storage().atomic(d=>queueGeneration(d,owner,value));
       if(result.launch&&result.session)await launchSession(result.session,result.launch,url.origin);
-      return json({job:jobView((await job(owner,value.requestId))!)},201);
+      const row=result.launch?(await job(owner,result.row.id))??result.row:result.row;
+      return json({job:jobView(row),replayed:result.replayed},result.replayed?200:201);
     }
     if(path[0]==="jobs" && path.length===3 && path[2]==="confirm-ended" && request.method==="POST"){
       const input=await readSmallJson(request);
@@ -174,6 +175,9 @@ export async function dispatchStudio(request:Request,path:string[],owner:string)
       return new Response(response.body,{status:response.status,headers});
     }
     return fail("接口不存在。",404);
-  } catch (e) { return fail(cleanError(e),e instanceof QueueError ? e.status : e instanceof IntegrationError ? e.status : e instanceof KaggleError && [401,403].includes(e.status) ? 403 : 400); }
+  } catch (e) {
+    if(e instanceof IntegrationError)return json({error:cleanError(e),code:e.code},e.status);
+    return fail(cleanError(e),e instanceof QueueError ? e.status : e instanceof KaggleError && [401,403].includes(e.status) ? 403 : 400);
+  }
 }
 
