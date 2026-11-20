@@ -38,8 +38,9 @@ GET  /api/v1/jobs/<id>/artifact?download=1   下载作品，同样需要Bearer�
 四、创建任务
 Content-Type: application/json；最大32KiB。
 requestId 为客户端生成的小写 UUID。accountId 可省略，也可填写已接入的账户 UUID。
-自动分配先复用空闲的匹配会话，再选空闲账号并行执行，最后选排队较短的匹配会话。
-近期已确认无权限或 GPU 额度耗尽的账户会暂时跳过。无可用账号时返回 HTTP 409（no_available_account）。
+自动分配先检查 GPU 剩余额度与会话时限，根据历史估算准备、生成和排队任务的耗时，并留出余量。无同模式历史时按视频 30 分钟或图片 10 分钟作为生成预留，再计入准备和余量。预估会随参数与实测数据变化。
+符合条件的账号中，先复用空闲匹配会话，再用空闲账号并行执行，最后选预计等待最短的匹配会话。
+HTTP 409 可能返回 no_available_account（无匹配会话）、gpu_quota_unavailable（额度无法确认）或 insufficient_gpu_time（预计额度或会话时间不足）。
 同一次业务请求重试必须沿用 requestId，不要每次换 ID。
 相同 ID 相同参数返回原任务；不同参数/账户返回409，不重复生成。
 seed 可省略：服务端随机生成并保存；重试省略时沿用原种子。

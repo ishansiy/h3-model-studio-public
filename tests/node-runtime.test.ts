@@ -86,8 +86,14 @@ async function exerciseScheduler(d:NodeDatabase) {
   await d.query('INSERT INTO accounts(id,owner,name,username,cipher,hint,created_at) VALUES(?,?,?,?,?,?,?)',
    [id,id===other?'another-owner':owner,id,id.slice(-1),'fixture','fixture',now]);
  }
- for(const [id,status,quotas] of [[invalid,'invalid',[]],[exhausted,'connected',[{resource:'GPU',remainingHours:0}]]] as const){
-  await d.query('INSERT INTO settings(id,value) VALUES(?,?)',[resourcesCacheKey(owner,id),JSON.stringify({checkedAt:now,status,quotas})]);
+ const quota=async (id:string,remainingHours:number|null)=>{
+  const status=remainingHours===null?'invalid':'connected';
+  const quotas=remainingHours===null?[]:[{resource:'GPU',remainingHours}];
+  await d.query('INSERT INTO settings(id,value) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value',
+   [resourcesCacheKey(owner,id),JSON.stringify({checkedAt:now,status,quotas})]);
+ };
+ for(const [id,hours] of [[a,10],[b,10],[invalid,null],[exhausted,0]] as const){
+  await quota(id,hours);
  }
  const input=()=>({requestId:crypto.randomUUID(),modelId:'hyperflow-h3-flash',prompt:'海边',width:608,height:352});
  const submit=(value:object)=>d.atomic(tx=>queueGeneration(tx,owner,value,now));
@@ -104,8 +110,8 @@ async function exerciseScheduler(d:NodeDatabase) {
  assert.equal(replayed.launch,null);
  const code=(value:string)=>(e:unknown)=>e instanceof IntegrationError&&e.status===409&&e.code===value;
  await assert.rejects(submit({...request,prompt:'不同提示词'}),code('idempotency_conflict'));
- await assert.rejects(submit({...input(),modelId:'h3'}),code('no_available_account'));
- await assert.rejects(submit({...input(),modelId:'z-image-turbo',width:1024,height:1024}),code('no_available_account'));
+ await assert.rejects(submit({...input(),modelId:'h3'}),code('insufficient_gpu_time'));
+ await assert.rejects(submit({...input(),modelId:'z-image-turbo',width:1024,height:1024}),code('insufficient_gpu_time'));
  assert.equal(Number(await d.prepare('SELECT count(*) AS n FROM jobs WHERE owner=?').bind(owner).first('n')),3);
  assert.equal(Number(await d.prepare('SELECT count(*) AS n FROM gpu_sessions WHERE owner=?').bind(owner).first('n')),2);
 
@@ -118,6 +124,17 @@ async function exerciseScheduler(d:NodeDatabase) {
  assert.equal((await submit(input())).row.account_id,a);
  const specified=await submit({...input(),accountId:invalid});
  assert.equal(specified.row.account_id,invalid);
+
+ // 估算以同配置已完成任务的 30 分钟真实计时字段为样本，另外计入队列预留。
+ await d.query("UPDATE jobs SET status='completed',artifact_key='fixture',metadata=? WHERE owner=? AND account_id=?",
+  [JSON.stringify({timings:{generation_seconds:1800,total_seconds:1800},server_reused:true}),owner,b]);
+ await d.query("UPDATE gpu_sessions SET status='active',stop_requested_at=NULL WHERE owner=? AND account_id=?",[owner,b]);
+ await quota(a,10/60);
+ await quota(b,50/60);
+ const long=await submit(input());
+ assert.equal(long.row.account_id,b);
+ assert.equal(long.launch,null);
+ await assert.rejects(submit(input()),code('insufficient_gpu_time'));
 }
 try {
  const file=join(dir,'test.db');

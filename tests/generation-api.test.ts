@@ -5,7 +5,8 @@ import {join} from 'node:path';
 import {createIntegrationKey,authenticateIntegration,revokeIntegrationKey,parseScopes,IntegrationError} from '../lib/integration-api';
 import {generationInput} from '../lib/generation-api';
 import {enqueue,cancelQueuedJob} from '../lib/session-queue';
-import {db,job} from '../lib/store';
+import {resourcesCacheKey} from '../lib/resources';
+import {db,encrypt,job} from '../lib/store';
 import {closeStorage,env} from '../lib/node-runtime';
 import {GET,POST,DELETE} from '../app/api/v1/[...path]/route';
 import {GET as spec} from '../app/api/v1/openapi.json/route';
@@ -46,7 +47,14 @@ try{
  assert.equal((await d.prepare('SELECT COUNT(*) AS n FROM gpu_sessions').first<any>())!.n,1);
  assert.equal((await d.prepare('SELECT COUNT(*) AS n FROM jobs WHERE id=?').bind(id).first<any>())!.n,1);
  assert.equal((await run('jobs/'+id)).status,200);
+ await d.prepare('INSERT INTO settings(id,value) VALUES(?,?)')
+  .bind(resourcesCacheKey('owner',aid),JSON.stringify({checkedAt:Date.now(),status:'connected',quotas:[{resource:'GPU',remainingHours:10/60}]})).run();
  const {accountId: _explicitAccount, ...automatic}={...input,requestId:crypto.randomUUID()};
+ const short=await run('jobs','POST',automatic);assert.equal(short.status,409);
+ assert.equal((await short.json() as {code:string}).code,'insufficient_gpu_time');
+ assert.equal(await job('owner',automatic.requestId),null);
+ await d.prepare('UPDATE settings SET value=? WHERE id=?')
+  .bind(JSON.stringify({checkedAt:Date.now(),status:'connected',quotas:[{resource:'GPU',remainingHours:10}]}),resourcesCacheKey('owner',aid)).run();
  const assigned=await run('jobs','POST',automatic);assert.equal(assigned.status,202);
  const assignedBody=await assigned.json() as {job:{accountId:string}};
  assert.equal(assignedBody.job.accountId,aid);
@@ -54,6 +62,27 @@ try{
  assert.equal(assignedJob.status,200);
  const assignedDetails=await assignedJob.json() as {job:{sessionId:string}};
  assert.equal(assignedDetails.job.sessionId,warm.session!.id);
+ // 额度缓存超时后必须重新核对。模拟 Kaggle 接口只允许身份和额度查询。
+ await d.prepare('UPDATE accounts SET cipher=? WHERE id=?').bind(await encrypt('KGAT_local_test_fixture'),aid).run();
+ await d.prepare('UPDATE settings SET value=? WHERE id=?')
+  .bind(JSON.stringify({checkedAt:Date.now()-180000,status:'connected',quotas:[{resource:'GPU',remainingHours:10}]}),resourcesCacheKey('owner',aid)).run();
+ const remoteCalls:string[]=[];
+ const offlineFetch=globalThis.fetch;
+ globalThis.fetch=async resource=>{
+  const {pathname}=new URL(String(resource));
+  remoteCalls.push(pathname);
+  if(pathname==='/api/v1/oauth2/introspect')return Response.json({active:true,username:'testuser'});
+  if(pathname==='/api/v1/kernels/quota')return Response.json({gpuQuota:{timeUsed:{seconds:3000},totalTimeAllowed:{seconds:3600}}});
+  throw Error('测试禁止启动真实GPU');
+ };
+ try{
+  const staleId=crypto.randomUUID();
+  const stale=await run('jobs','POST',{...automatic,requestId:staleId});
+  assert.equal(stale.status,409);
+  assert.equal((await stale.json() as {code:string}).code,'insufficient_gpu_time');
+  assert.equal(await job('owner',staleId),null);
+  assert.deepEqual(remoteCalls,['/api/v1/oauth2/introspect','/api/v1/kernels/quota']);
+ }finally{globalThis.fetch=offlineFetch;}
  assert.equal((await run('jobs?limit=1')).status,200);
  assert.equal((await run('jobs?limit=1000')).status,400);
  assert.equal((await run('jobs/'+crypto.randomUUID()+'/sync','POST')).status,404);

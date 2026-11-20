@@ -2,7 +2,7 @@ import {MODEL_CATALOG,CATEGORIES} from './model-catalog';
 import {publicUrl,samePublicOrigin} from './public-url';
 import {accountProxyRoute} from './account-proxy';
 import {getSession,sessionView,stopGpuSession,cancelQueuedJob,QueueError} from "./session-queue";
-import {queueGeneration} from './account-scheduler';
+import {queueGeneration,refreshSchedulingResources} from './account-scheduler';
 import {launchSession,syncGpuSession,queueVideoResponse} from "./gpu-session-service";
 import {workerApi,queueJson} from "./session-worker-api";
 import {modelCacheSources} from "./model-cache";
@@ -14,7 +14,8 @@ import { account, bootstrap, db, decrypt, accountCredential, job, jobView, saveA
 import { cleanError, findFile, kaggle, KaggleError, liveProgress, output, queryFor } from "./kaggle";
 import { buildNotebook } from "./notebook";
 import { samplingSteps, validateParams } from "./parameters";
-import { queryAccountResources, resourcesCacheKey, type AccountResources } from "./resources";
+import { resourcesCacheKey } from "./resources";
+import { getAccountResources } from './account-resources';
 import { accessCookieFromRequest,hasAccessSession } from "./access";
 import { siteAccessConfig } from "./access-runtime";
 import { listIntegrationKeys,createIntegrationKey,revokeIntegrationKey,readSmallJson,IntegrationError } from "./integration-api";
@@ -105,18 +106,7 @@ export async function dispatchStudio(request:Request,path:string[],owner:string)
     }
     if (path[0] === "accounts" && path.length === 3 && path[2] === "resources" && request.method === "GET") {
       const a = await account(owner,path[1]); if (!a) return fail("账户不存在。",404);
-      const cacheKey=resourcesCacheKey(owner,a.id);
-      const cached=await db().prepare("SELECT value FROM settings WHERE id=?").bind(cacheKey).first<{value:string}>();
-      if (cached) {
-        try {
-          const value=JSON.parse(cached.value) as AccountResources, age=Date.now()-value.checkedAt;
-          const ttl=value.error || value.quotaError ? 15000 : 120000;
-          if (age>=0 && (age<5000 || (url.searchParams.get("refresh") !== "1" && age<ttl))) return json({resources:value});
-        } catch {}
-      }
-      const value=await queryAccountResources(await accountCredential(a),a.username);
-      await db().prepare("INSERT INTO settings(id,value) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value").bind(cacheKey,JSON.stringify(value)).run();
-      return json({resources:value});
+      return json({resources:await getAccountResources(a,url.searchParams.get("refresh")==="1")});
     }
     if (path[0] === "accounts" && path[1] && request.method === "DELETE") {
       const busy = await db().prepare("SELECT id FROM jobs WHERE owner=? AND account_id=? AND status IN ('submitting','queued','running','submission_unknown')").bind(owner,path[1]).first();
@@ -142,6 +132,7 @@ export async function dispatchStudio(request:Request,path:string[],owner:string)
     }
     if (path[0] === "jobs" && path.length === 1 && request.method === "POST") {
       const value=await queueJson(request);
+      await refreshSchedulingResources(owner,value);
       const result=await storage().atomic(d=>queueGeneration(d,owner,value));
       if(result.launch&&result.session)await launchSession(result.session,result.launch,url.origin);
       const row=result.launch?(await job(owner,result.row.id))??result.row:result.row;

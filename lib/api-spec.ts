@@ -24,7 +24,7 @@ const invalidType = error('提交的请求体必须使用 application/json。', 
 const tooLarge = error('请求体超过该接口的字节上限。', 'body_too_large', '请求内容过大。');
 const taskMissing = error('找不到该工作室的任务。', 'not_found', '任务不存在。');
 const invalidTask = error('请求字段、UUID、模型或参数组合不合法。', 'invalid_parameters', '请选择支持的生成参数。');
-const conflict = error('请求 ID 与既有任务参数不一致、暂无可分配的账号，或当前 GPU 会话条件不允许排队。', 'conflict', '请核对 requestId、模型和会话状态。');
+const conflict = error('请求 ID 已用于其他参数、暂无匹配账号、GPU 额度无法确认，或额度和会话时间预计不足。自动分配可返回 no_available_account、gpu_quota_unavailable 或 insufficient_gpu_time。', 'conflict', '请核对 requestId、模型和会话状态。');
 const commonErrors = { '401': unauthorized, '403': forbidden, '429': rateLimited, '503': unavailable };
 
 const jobId = '123e4567-e89b-42d3-a456-426614174000';
@@ -122,7 +122,7 @@ export const API_SPEC = {
       post: {
         operationId: 'createJob', tags: ['生成任务'], 'x-required-scope': 'jobs:write',
         summary: '提交图像或视频任务',
-        description: '请求体最多 32 KiB。省略 accountId 时自动分配账号。requestId 由客户端生成。相同 ID 与参数可重试，相同 ID 改参数返回 409。seed 省略时由服务端分配，最终生效参数见 job.params。202 表示任务已受理，后续需查询状态。同账户同模型同运行方案可以复用 GPU 会话。',
+        description: '请求体最多 32 KiB。省略 accountId 时自动分配账号，将预计任务耗时和队列负载与 GPU 剩余额度及会话时限比较。requestId 由客户端生成。相同 ID 与参数可重试，相同 ID 改参数返回 409。seed 省略时由服务端分配，最终生效参数见 job.params。202 表示任务已受理，后续需查询状态。同账户同模型同运行方案可以复用 GPU 会话。',
         requestBody: {
           required: true,
           content: {
