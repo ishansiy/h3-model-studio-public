@@ -1,4 +1,4 @@
-import {attachHyperFlowJobConfig} from './hyperflow-resident';
+import {attachHyperFlowJobConfig,HYPERFLOW_DUAL_T4_JOB_CONDITION} from './hyperflow-resident';
 // 两卡按注意力头分工；每个头仍读取完整K/V，不做稀疏化或降精度。
 export const HEAD_PARALLEL_CORE=String.raw`
 import torch
@@ -58,7 +58,7 @@ _hf_mm.optimized_attention=_hf_head_attention
 def _hf_head_job_enabled(nonce):
     try:
         config=_hf_json.loads(_HFPath("/kaggle/working/hyperflow_active_job.json").read_text())
-        return config.get("width")==1024 and config.get("height")==768 and config.get("frames")==124 and config.get("steps")==6 and bool(config.get("jobId")) and config["jobId"] in nonce
+        return ${HYPERFLOW_DUAL_T4_JOB_CONDITION}
     except (OSError,ValueError,TypeError):return False
 _hf_head_audit_original=StudioHyperFlowAudit.audit
 

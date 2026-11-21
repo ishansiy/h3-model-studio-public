@@ -17,12 +17,12 @@ console.log('通过：显存估算封顶保留较小估算、记录原值与峰�
 
 import {buildHyperFlowNotebook} from '../lib/hyperflow';
 import {validateHyperFlow} from '../lib/hyperflow-config';
-for(const [width,height,steps,duration,expected] of [[1024,768,6,5,true],[608,352,6,5,false],[1024,768,8,5,false],[1024,768,6,6,false]] as const){
+for(const [width,height,steps,duration] of [[1024,768,4,5],[1024,768,6,5]] as const){
  const p=validateHyperFlow({prompt:'海边',width,height,steps,duration,seed:20260803});
  const n=buildHyperFlowNotebook(p,'https://studio.test/api/worker/session','a'.repeat(64),{safeMixed:true,resident:true});
- assert.ok(n.includes('hyperflow_active_job.json')&&n.includes('hyperflow_1024_fp16_budget_v1'));void expected;
+ assert.ok(n.includes('hyperflow_active_job.json')&&n.includes('hyperflow_1024_fp16_budget_v1'));
 }
-console.log('通过：显存策略仅作用于1024×768/5秒请求/6步，其他尺寸/步数/时长保留逐任务选择原策略。');
+console.log('通过：两档均注入逐任务显存策略。');
 const n=buildHyperFlowNotebook(validateHyperFlow({prompt:'海边',width:1024,height:768,duration:5,steps:6,seed:20260803}),'https://studio.test/api/worker/session','a'.repeat(64),{safeMixed:true,resident:true});
 const reuse=spawnSync('python3',['-c',`import ast,json,sys,types
 n=json.load(sys.stdin);snippets=[]
@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory() as d:
   fn=next(x for x in ast.parse(source).body if isinstance(x,ast.FunctionDef) and x.name==name);scope={'_HFPath':lambda _:path,'_hf_json':json}
   exec(compile(ast.Module(body=[fn],type_ignores=[]),'guard','exec'),scope);f=scope[name]
   assert not f('job')
-  for width,height,frames,steps,enabled in [(1024,768,124,6,True),(608,352,124,6,False),(1024,768,141,6,False),(1024,768,124,8,False)]:
+  for width,height,frames,steps,enabled in [(1024,768,124,4,True),(1024,768,124,6,True),(608,352,124,4,False),(1024,768,141,4,False),(1024,768,141,6,False),(1024,768,124,8,False)]:
    path.write_text(json.dumps({'jobId':'job','width':width,'height':height,'frames':frames,'steps':steps}));assert bool(f('prefix-job'))==enabled;assert not f('different-nonce')
   path.write_text('bad json');assert not f('job')
 `],{input:JSON.stringify([[HYPERFLOW_RESIDENT_NODE,'_hf_resident_enabled'],[HEAD_PARALLEL_INSTALL,'_hf_head_job_enabled']]),encoding:'utf8'});assert.equal(gate.status,0,gate.stderr);

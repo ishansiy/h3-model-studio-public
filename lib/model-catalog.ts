@@ -1,5 +1,5 @@
 import { validateGenerationInputs, type GenerationInputs } from './generation-inputs';
-import {HYPERFLOW_RESOLUTIONS,validateHyperFlow,type HyperFlowParams} from './hyperflow-config';
+import {HYPERFLOW_FAST_PRESET,HYPERFLOW_RESOLUTIONS,validateHyperFlow,type HyperFlowParams} from './hyperflow-config';
 import {MAX_SEED,samplingSteps,type VideoParams} from './parameters';
 import {validateSiteParams,RESOLUTION_OPTIONS} from './site-options';
 
@@ -11,7 +11,7 @@ export const IMAGE_RESOLUTIONS=[{value:'1024x1024',label:'1:1 · 1024 × 1024'},
 export const CATEGORIES=[{id:'video',label:'视频生成',defaultModelId:'h3'},{id:'image',label:'图像生成',defaultModelId:'z-image-turbo'}] as const;
 export const MODEL_CATALOG=[
  {id:'h3',category:'video',name:'H3',subtitle:'视频默认模型',description:'文生视频、首帧和首尾帧生视频，支持原版、Turbo 和连续 GPU 会话。',sourceUrl:'https://docs.comfy.org/tutorials/video/minimax/minimax-h3',license:'沿用原模型许可',generationTypes:['text-to-video','image-to-video','frames-to-video'],provider:'kaggle',runner:'comfyui-h3',loadPolicy:'按需加载到GPU会话',precision:'原版配置',resolutions:RESOLUTION_OPTIONS,defaults:{mode:'quality',width:608,height:352,duration:5,steps:20,runtimeProfile:'standard'}},
- {id:'hyperflow-h3-flash',category:'video',name:'HyperFlow H3 Flash',subtitle:'少步音视频模型',description:'独立剪枝音视频模型，支持文字、首帧或首尾帧输入，默认 6 步，支持 4/6/8 步。',sourceUrl:'https://huggingface.co/VideoRebirthAI/hyperflow-h3-flash',license:'MiniMax H3 社区许可；节点GPL-3.0',generationTypes:['text-to-video','image-to-video','frames-to-video'],provider:'kaggle',runner:'comfyui-hyperflow',loadPolicy:'独立模型GPU会话，按需加载',precision:'GGUF Q4_K_M',resolutions:HYPERFLOW_RESOLUTIONS,defaults:{mode:'quality',width:608,height:352,duration:5,steps:6,runtimeProfile:'standard'}},
+ {id:'hyperflow-h3-flash',category:'video',name:'HyperFlow H3 Flash',subtitle:'少步音视频模型',description:'独立剪枝音视频模型，支持文字、首帧或首尾帧输入，默认 6 步，支持 4/6/8 步。',sourceUrl:'https://huggingface.co/VideoRebirthAI/hyperflow-h3-flash',license:'MiniMax H3 社区许可；节点GPL-3.0',generationTypes:['text-to-video','image-to-video','frames-to-video'],provider:'kaggle',runner:'comfyui-hyperflow',loadPolicy:'独立模型GPU会话，按需加载',precision:'GGUF Q4_K_M',resolutions:HYPERFLOW_RESOLUTIONS,fastPreset:HYPERFLOW_FAST_PRESET,defaults:{mode:'quality',width:608,height:352,duration:5,steps:6,runtimeProfile:'standard'}},
  {id:'z-image-turbo',category:'image',name:'Z-Image-Turbo',subtitle:'图像默认模型',description:'支持中文和英文提示词，可文生图、图生图或用蒙版局部重绘。',sourceUrl:'https://huggingface.co/Tongyi-MAI/Z-Image-Turbo',license:'Apache 2.0',generationTypes:['text-to-image','image-to-image','inpaint'],provider:'kaggle',runner:'diffusers-zimage',loadPolicy:'按需加载到GPU会话',precision:'浮点权重，不量化',resolutions:IMAGE_RESOLUTIONS,defaults:{width:1024,height:1024,steps:9,runtimeProfile:'standard'}},
 ] as const;
 export function modelById(id:string){return MODEL_CATALOG.find(m=>m.id===id);}

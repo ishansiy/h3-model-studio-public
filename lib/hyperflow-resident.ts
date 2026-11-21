@@ -1,9 +1,16 @@
-/** 高尺寸的显存调度候选；不改权重、计算精度、注意力、步数或采样算子。 */
+import {HYPERFLOW_DUAL_T4_STEPS,HYPERFLOW_FAST_PRESET} from './hyperflow-config';
+
+const {width,height,frames}=HYPERFLOW_FAST_PRESET;
+export const HYPERFLOW_DUAL_T4_JOB_CONDITION=
+  'config.get("width")=='+width+' and config.get("height")=='+height+' and config.get("frames")=='+frames+
+  ' and config.get("steps") in ('+HYPERFLOW_DUAL_T4_STEPS.join(',')+') and bool(config.get("jobId")) and config["jobId"] in nonce';
+
+/** 高尺寸逐任务显存调度，沿用原权重和采样设置。 */
 export const HYPERFLOW_RESIDENT_NODE=String.raw`
 def _hf_resident_enabled(nonce):
     try:
         config=_hf_json.loads(_HFPath("/kaggle/working/hyperflow_active_job.json").read_text())
-        return config.get("width")==1024 and config.get("height")==768 and config.get("frames")==124 and config.get("steps")==6 and bool(config.get("jobId")) and config["jobId"] in nonce
+        return ${HYPERFLOW_DUAL_T4_JOB_CONDITION}
     except (OSError,ValueError,TypeError):return False
 _hf_resident_audit_original=StudioHyperFlowAudit.audit
 def _hf_resident_audit(self,model,nonce):

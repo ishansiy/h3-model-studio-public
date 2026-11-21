@@ -1,5 +1,6 @@
 import { GENERATION_TYPES } from './generation-inputs';
 import { MODEL_CATALOG } from './model-catalog';
+import { HYPERFLOW_FAST_PRESET } from './hyperflow-config';
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const json = (schema: unknown, example?: unknown) => ({
@@ -33,6 +34,11 @@ const accountId = '123e4567-e89b-42d3-a456-426614174001';
 const videoExample = {
   requestId: jobId, category: 'video', modelId: 'hyperflow-h3-flash',
   prompt: '一只小黄鸭在水面缓缓漂浮。', width: 512, height: 288, duration: 5, steps: 4,
+};
+const fastVideoExample = {
+  ...videoExample, requestId: '123e4567-e89b-42d3-a456-426614174003',
+  width: HYPERFLOW_FAST_PRESET.width, height: HYPERFLOW_FAST_PRESET.height,
+  duration: HYPERFLOW_FAST_PRESET.duration, steps: HYPERFLOW_FAST_PRESET.steps,
 };
 const imageExample = {
   requestId: '123e4567-e89b-42d3-a456-426614174002', category: 'image', modelId: 'z-image-turbo',
@@ -148,6 +154,7 @@ export const API_SPEC = {
               schema: ref('GenerationRequest'),
               examples: {
                 video: { summary: '生成视频', value: videoExample },
+                hyperflowFast: { summary: 'HyperFlow 1024×768 双 T4 快档', value: fastVideoExample },
                 image: { summary: '生成图片', value: imageExample },
                 keyframes: { summary: '用上传的首尾帧生成视频', value: {
                   ...videoExample, generationType: 'frames-to-video', firstFrame: 'a'.repeat(64), lastFrame: 'b'.repeat(64),
@@ -239,6 +246,15 @@ export const API_SPEC = {
           generationTypes: { type: 'array', items: { type: 'string', enum: Object.keys(GENERATION_TYPES) } },
           resolutions: { type: 'array', items: { type: 'object', properties: { value: { type: 'string' }, label: { type: 'string' } } } },
           defaults: { type: 'object', description: '该模型的默认生成参数。' },
+          fastPreset: {
+            type: 'object', required: ['width', 'height', 'duration', 'frames', 'steps', 'accelerator'],
+            description: 'HyperFlow 的双 T4 快档。提交尺寸、时长和步数即可选择，frames 是对齐后的输出帧数。',
+            properties: {
+              width: { type: 'integer' }, height: { type: 'integer' }, duration: { type: 'number' },
+              frames: { type: 'integer' }, steps: { type: 'integer' },
+              accelerator: { type: 'string', const: 'dual-t4' },
+            },
+          },
         },
       },
       AccountRequest: {
@@ -284,7 +300,7 @@ export const API_SPEC = {
           strength: { type: 'number', minimum: 0.2, maximum: 1, description: '重绘幅度。图生图默认 0.6，局部重绘默认 1。' },
           mode: { type: 'string', enum: ['quality', 'turbo'], description: 'H3 原版默认 quality。HyperFlow 只支持 quality，图片省略。' },
           duration: { type: 'number', minimum: 4, maximum: 15, description: '请求视频秒数。H3 为 4–15 秒，1024×768 上限 4.46 秒，HyperFlow 为 5–15 秒。图片省略。帧数对齐后实际时长可能略长。' },
-          steps: { type: 'integer', minimum: 1, maximum: 50, description: 'H3 原版 1–50（默认 20）、H3 Turbo 4 或 8（默认 8）、HyperFlow 4／6／8（默认 6）、Z-Image 固定 9。' },
+          steps: { type: 'integer', minimum: 1, maximum: 50, description: 'H3 原版 1–50（默认 20）、H3 Turbo 4 或 8（默认 8）、HyperFlow 4／6／8（默认 6）、Z-Image 固定 9。HyperFlow 的 1024×768、时长对齐为 124 帧时，4 步自动使用双 T4 快档，推荐请求 duration=5。' },
           runtimeProfile: { type: 'string', enum: ['standard', 'fp16', 'ck'], description: '默认 standard。fp16 仅 H3 原版，HyperFlow 和 Z-Image 仅 standard。' },
           seed: { oneOf: [{ type: 'string', pattern: '^[0-9]{1,20}$' }, { type: 'integer', minimum: 0, maximum: 9007199254740991 }], description: '省略时随机分配。范围 0–18446744073709551615，超过 JavaScript 安全整数时使用十进制字符串。' },
         },
@@ -300,7 +316,7 @@ export const API_SPEC = {
           status: { type: 'string', enum: ['submitting', 'submission_unknown', 'queued', 'running', 'completed', 'failed', 'cancelled'] },
           params: { type: 'object', description: '实际执行的参数和种子。' },
           stage: { type: 'string' }, step: { type: 'integer' }, totalSteps: { type: 'integer' },
-          stopRequestedAt: { type: ['integer', 'null'] }, error: { type: ['string', 'null'] }, metadata: { type: ['object', 'null'] },
+          stopRequestedAt: { type: ['integer', 'null'] }, error: { type: ['string', 'null'] }, metadata: { type: ['object', 'null'], description: '成功的双 T4 快档任务可在 hyperflow_precision_proof.head_parallel 查到实际调用次数 calls 和参与设备 devices。' },
           createdAt: { type: 'integer', description: 'Unix 毫秒。' }, updatedAt: { type: 'integer', description: 'Unix 毫秒。' },
         },
       },

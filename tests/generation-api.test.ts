@@ -22,6 +22,8 @@ try{
  assert.throws(()=>generationInput({...input,seed:null}),/随机种子/);
  assert.throws(()=>generationInput({...input,owner:'other'}),/未支持/);
  assert.throws(()=>generationInput({...input,width:1344,height:768}),/尺寸/);
+ const defaultFlash=generationInput({...input,width:1024,height:768});
+ assert.equal(defaultFlash.steps,6);
  const highest=generationInput({...input,modelId:'h3',width:1024,height:768});assert.ok(highest.category==='video');assert.equal(highest.duration,4.46);
  assert.throws(()=>generationInput({...input,modelId:'h3',width:1024,height:768,duration:5}),/4.46/);
  assert.equal(generationInput({...input,category:'image',modelId:'z-image-turbo'}).category,'image');
@@ -34,7 +36,10 @@ try{
  const run=(path:string,method='GET',body?:unknown,key=token)=>({GET,POST,DELETE}[method as 'GET']!)(req(path,method,body,key),{params:Promise.resolve({path:path.split('?')[0].split('/')})});
  assert.equal((await run('models','GET',undefined,'')).status,401);
  assert.equal((await run('models','GET',undefined,legacy.token)).status,403);
- assert.equal((await run('models')).status,200);
+ const models=await run('models');assert.equal(models.status,200);
+ const flash=(await models.json() as {models:any[]}).models.find(m=>m.id==='hyperflow-h3-flash');
+ assert.equal(flash.defaults.steps,6);
+ assert.deepEqual(flash.fastPreset,{width:1024,height:768,duration:5,frames:124,steps:4,accelerator:'dual-t4'});
  assert.equal((await run('jobs','POST',input,reader)).status,403);
  assert.equal((await run('jobs/'+id+'/control')).status,404);
  assert.equal((await run('jobs','DELETE')).status,405);
@@ -130,6 +135,11 @@ try{
  assert.ok(!Object.hasOwn(document.components.schemas.ModelsResponse.properties,'categories'));
  const samples=document.paths['/api/v1/jobs'].post.requestBody.content['application/json'].examples;
  assert.equal(generationInput(samples.video.value).category,'video');
+ assert.equal(generationInput(samples.hyperflowFast.value).steps,4);
+ const {requestId:fastExampleId, ...fastExample}=samples.hyperflowFast.value;
+ assert.equal((await run('jobs','POST',{...fastExample,requestId:fastExampleId,accountId:aid})).status,202);
+ assert.equal(JSON.parse((await job('owner',fastExampleId))!.params).steps,4);
+ await cancelQueuedJob(d,'owner',fastExampleId);
  assert.equal(generationInput(samples.image.value).category,'image');
  assert.equal(generationInput(samples.keyframes.value).generationType,'frames-to-video');
  assert.equal(generationInput(samples.editImage.value).generationType,'inpaint');

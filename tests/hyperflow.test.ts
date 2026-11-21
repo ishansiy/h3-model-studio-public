@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {buildModelNotebook} from '../lib/model-runners';
 import {validateGenerationParams,modelForCategory} from '../lib/model-catalog';
-import {HYPERFLOW} from '../lib/hyperflow-config';
+import {HYPERFLOW,hyperFlowFastSessionKey,usesHyperFlowFastPreset} from '../lib/hyperflow-config';
 import {NodeDatabase} from '../lib/node-runtime';
 import {enqueue,finishQueueJob} from '../lib/session-queue';
 const params={category:'video',modelId:HYPERFLOW.id,prompt:'海边少女；声音：海浪。',width:608,height:352,duration:5,steps:6,seed:'3609155487304108365'};
@@ -44,5 +44,27 @@ try{
  const finish=(metadata:any)=>finishQueueJob(d as any,q.session!,{jobId:q.row.id,claimToken:'claim',status:'completed',metadata},async()=>({size:1}));
  await assert.rejects(finish({...m,hyperflow_proof:{...m.hyperflow_proof,forward_calls:0}}),/采样证明/);await assert.rejects(finish({...m,model_id:'h3'}),/采样证明/);await assert.rejects(finish({...m,resolved_config:{...m.resolved_config,sampler:'res_multistep'}}),/采样证明/);
  assert.equal((await finish(m)).status,'completed');
+ const fast={...params,width:1024,height:768,steps:4};
+ assert.ok(usesHyperFlowFastPreset(fast));
+ assert.ok(!usesHyperFlowFastPreset({...fast,duration:6}));
+ assert.ok(!usesHyperFlowFastPreset({...fast,duration:4.99}));
+ assert.ok(!usesHyperFlowFastPreset({...fast,steps:6}));
+ const a={id:'a',name:'测试',username:'owner'};
+ const f=await enqueue(d as any,'owner',a,crypto.randomUUID(),fast);
+ assert.equal(f.launch,null);
+ assert.equal(f.session!.id,q.session!.id);
+ await d.prepare("UPDATE jobs SET status='running',claim_token='claim',artifact_key='key',artifact_bytes=1,artifact_sha='sha' WHERE id=?").bind(f.row.id).run();
+ const metadata={...m,resolved_config:{...m.resolved_config,...fast},
+  media_validation:{...m.media_validation,width:1024,height:768},
+  hyperflow_proof:{...m.hyperflow_proof,forward_calls:4,nonce:f.row.id}};
+ const finishFast=(metadata:any)=>finishQueueJob(d as any,f.session!,{jobId:f.row.id,claimToken:'claim',status:'completed',metadata},async()=>({size:1}));
+ await assert.rejects(finishFast(metadata),/双 T4 快档/);
+ const head={enabled:true,backend:'dual_t4_full_attention_heads_v1',calls:188,devices:['cuda:0','cuda:1'],full_key_value_sequence:true,sparse:false,quantized_attention:false};
+ const accelerated={...metadata,devices:['Tesla T4','Tesla T4'],hyperflow_precision_proof:{head_parallel:head,resident_policy:{enabled:true}}};
+ await assert.rejects(finishFast({...accelerated,hyperflow_precision_proof:{...accelerated.hyperflow_precision_proof,head_parallel:{...head,calls:0}}}),/双 T4 快档/);
+ assert.equal((await finishFast(accelerated)).status,'completed');
+ await d.prepare('DELETE FROM settings WHERE id=?').bind(hyperFlowFastSessionKey(q.session!.id)).run();
+ await assert.rejects(enqueue(d as any,'owner',a,crypto.randomUUID(),fast),/会话早于双 T4 快档/);
+ assert.equal((await enqueue(d as any,'owner',a,crypto.randomUUID(),params)).session!.id,q.session!.id);
 }finally{await d.close();}
 console.log('通过：HyperFlow独立参数/调度/执行器、原模型默认保留、会话隔离、实际采样证明与成片交付。');

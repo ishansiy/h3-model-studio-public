@@ -36,5 +36,5 @@ console.log('通过：完整K/V拆头数学一致、头顺序保留、容器仅�
 
 import {buildHyperFlowNotebook} from '../lib/hyperflow';
 import {validateHyperFlow} from '../lib/hyperflow-config';
-for(const [width,height,steps,enabled] of [[1024,768,6,true],[608,352,6,false],[1024,768,8,false]] as const){const n=buildHyperFlowNotebook(validateHyperFlow({prompt:'海边',width,height,steps,duration:5,seed:20260803}),'https://studio.test/api/worker/session','a'.repeat(64),{safeMixed:true,resident:true,headParallel:true});assert.ok(n.includes('dual_t4_full_attention_heads_v1')&&n.includes('hyperflow_active_job.json'));void enabled;}
-console.log('通过：双卡只对已固定的1024×768/5秒/6步候选启用，其他档位保留原执行方式。');
+for(const [width,height,steps] of [[1024,768,4],[1024,768,6],[608,352,4],[1024,768,8]] as const){const n=buildHyperFlowNotebook(validateHyperFlow({prompt:'海边',width,height,steps,duration:5,seed:20260803}),'https://studio.test/api/worker/session','a'.repeat(64),{safeMixed:true,resident:true,headParallel:true});assert.ok(n.includes('dual_t4_full_attention_heads_v1')&&n.includes('hyperflow_active_job.json'));}
+console.log('通过：1024×768 的 4 步与 6 步采样使用同一双卡 Notebook 模板。');
