@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {buildModelNotebook} from '../lib/model-runners';
 import {validateGenerationParams,modelForCategory} from '../lib/model-catalog';
-import {HYPERFLOW,hyperFlowFastSessionKey,usesHyperFlowFastPreset} from '../lib/hyperflow-config';
+import {HYPERFLOW,HYPERFLOW_10S_PRESET,hyperFlowDualT4Preset,hyperFlowFastSessionKey,hyperFlow10sSessionKey} from '../lib/hyperflow-config';
+import {createGenerationBudget} from '../lib/generation-budget';
 import {NodeDatabase} from '../lib/node-runtime';
 import {enqueue,finishQueueJob} from '../lib/session-queue';
 const params={category:'video',modelId:HYPERFLOW.id,prompt:'海边少女；声音：海浪。',width:608,height:352,duration:5,steps:6,seed:'3609155487304108365'};
@@ -45,10 +46,10 @@ try{
  await assert.rejects(finish({...m,hyperflow_proof:{...m.hyperflow_proof,forward_calls:0}}),/采样证明/);await assert.rejects(finish({...m,model_id:'h3'}),/采样证明/);await assert.rejects(finish({...m,resolved_config:{...m.resolved_config,sampler:'res_multistep'}}),/采样证明/);
  assert.equal((await finish(m)).status,'completed');
  const fast={...params,width:1024,height:768,steps:4};
- assert.ok(usesHyperFlowFastPreset(fast));
- assert.ok(!usesHyperFlowFastPreset({...fast,duration:6}));
- assert.ok(!usesHyperFlowFastPreset({...fast,duration:4.99}));
- assert.ok(!usesHyperFlowFastPreset({...fast,steps:6}));
+ assert.ok(hyperFlowDualT4Preset(fast));
+ assert.ok(!hyperFlowDualT4Preset({...fast,duration:6}));
+ assert.ok(!hyperFlowDualT4Preset({...fast,duration:4.99}));
+ assert.ok(!hyperFlowDualT4Preset({...fast,steps:6}));
  const a={id:'a',name:'测试',username:'owner'};
  const f=await enqueue(d as any,'owner',a,crypto.randomUUID(),fast);
  assert.equal(f.launch,null);
@@ -63,6 +64,25 @@ try{
  const accelerated={...metadata,devices:['Tesla T4','Tesla T4'],hyperflow_precision_proof:{head_parallel:head,resident_policy:{enabled:true}}};
  await assert.rejects(finishFast({...accelerated,hyperflow_precision_proof:{...accelerated.hyperflow_precision_proof,head_parallel:{...head,calls:0}}}),/双 T4 快档/);
  assert.equal((await finishFast(accelerated)).status,'completed');
+ const long={...fast,duration:10};
+ assert.equal(hyperFlowDualT4Preset(long),HYPERFLOW_10S_PRESET);
+ assert.equal(hyperFlowDualT4Preset({...long,steps:6}),undefined);
+ assert.equal(hyperFlowDualT4Preset({...long,width:608,height:352}),undefined);
+ const parsedLong=validateGenerationParams(long);
+ assert.ok(createGenerationBudget([])(parsedLong,true)>HYPERFLOW_10S_PRESET.measuredTotalSeconds);
+ const l=await enqueue(d as any,'owner',a,crypto.randomUUID(),long);
+ assert.equal(l.session!.id,q.session!.id);
+ await d.prepare("UPDATE jobs SET status='running',claim_token='claim',artifact_key='key',artifact_bytes=1,artifact_sha='sha' WHERE id=?").bind(l.row.id).run();
+ const longMetadata={...accelerated,resolved_config:{...accelerated.resolved_config,duration:10,frames:243},
+  media_validation:{...accelerated.media_validation,frames:243},hyperflow_proof:{...accelerated.hyperflow_proof,nonce:l.row.id}};
+ const finishLong=(metadata:any)=>finishQueueJob(d as any,l.session!,{jobId:l.row.id,claimToken:'claim',status:'completed',metadata},async()=>({size:1}));
+ await assert.rejects(finishLong(longMetadata),/双 T4 快档/);
+ assert.equal((await finishLong({...longMetadata,hyperflow_precision_proof:{
+  ...longMetadata.hyperflow_precision_proof,resident_policy:{enabled:true,activation_budget_bytes:11*1024**3},
+ }})).status,'completed');
+ await d.prepare('DELETE FROM settings WHERE id=?').bind(hyperFlow10sSessionKey(q.session!.id)).run();
+ await assert.rejects(enqueue(d as any,'owner',a,crypto.randomUUID(),long),/会话早于双 T4 快档/);
+ assert.equal((await enqueue(d as any,'owner',a,crypto.randomUUID(),fast)).session!.id,q.session!.id);
  await d.prepare('DELETE FROM settings WHERE id=?').bind(hyperFlowFastSessionKey(q.session!.id)).run();
  await assert.rejects(enqueue(d as any,'owner',a,crypto.randomUUID(),fast),/会话早于双 T4 快档/);
  assert.equal((await enqueue(d as any,'owner',a,crypto.randomUUID(),params)).session!.id,q.session!.id);

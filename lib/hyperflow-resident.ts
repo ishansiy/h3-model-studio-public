@@ -1,29 +1,33 @@
-import {HYPERFLOW_DUAL_T4_STEPS,HYPERFLOW_FAST_PRESET} from './hyperflow-config';
+import {HYPERFLOW_10S_ACTIVATION_GIB,HYPERFLOW_10S_PRESET,HYPERFLOW_DUAL_T4_STEPS,HYPERFLOW_FAST_PRESET} from './hyperflow-config';
 
 const {width,height,frames}=HYPERFLOW_FAST_PRESET;
+const shortJob='config.get("frames")=='+frames+' and config.get("steps") in ('+HYPERFLOW_DUAL_T4_STEPS.join(',')+')';
+const longJob='config.get("frames")=='+HYPERFLOW_10S_PRESET.frames+' and config.get("steps")=='+HYPERFLOW_10S_PRESET.steps;
 export const HYPERFLOW_DUAL_T4_JOB_CONDITION=
-  'config.get("width")=='+width+' and config.get("height")=='+height+' and config.get("frames")=='+frames+
-  ' and config.get("steps") in ('+HYPERFLOW_DUAL_T4_STEPS.join(',')+') and bool(config.get("jobId")) and config["jobId"] in nonce';
+  'config.get("width")=='+width+' and config.get("height")=='+height+
+  ' and (('+shortJob+') or ('+longJob+')) and bool(config.get("jobId")) and config["jobId"] in nonce';
 
 /** 高尺寸逐任务显存调度，沿用原权重和采样设置。 */
 export const HYPERFLOW_RESIDENT_NODE=String.raw`
-def _hf_resident_enabled(nonce):
+def _hf_resident_budget(nonce):
     try:
         config=_hf_json.loads(_HFPath("/kaggle/working/hyperflow_active_job.json").read_text())
-        return ${HYPERFLOW_DUAL_T4_JOB_CONDITION}
-    except (OSError,ValueError,TypeError):return False
+        if ${HYPERFLOW_DUAL_T4_JOB_CONDITION}:
+            return (${HYPERFLOW_10S_ACTIVATION_GIB} if config["frames"]==${HYPERFLOW_10S_PRESET.frames} else 6)*1024**3
+    except (OSError,ValueError,TypeError,AttributeError):pass
+    return 0
 _hf_resident_audit_original=StudioHyperFlowAudit.audit
 def _hf_resident_audit(self,model,nonce):
     patcher=model
     result=_hf_resident_audit_original(self,patcher,nonce)
     m=patcher.model.diffusion_model
-    enabled=_hf_resident_enabled(nonce)
+    budget=_hf_resident_budget(nonce)
     if getattr(patcher.model,"_hf_resident_installed",False):
-        m._studio_hf_mixed_stats["resident_policy"]["enabled"]=enabled
+        m._studio_hf_mixed_stats["resident_policy"].update(enabled=bool(budget),activation_budget_bytes=budget)
         return result
     original_memory=patcher.model.memory_required
     stats=m._studio_hf_mixed_stats
-    stats["resident_policy"]={"name":"hyperflow_1024_fp16_budget_v1","activation_budget_bytes":6*1024**3,"original_estimate_bytes":[],"selected_estimate_bytes":[],"memory_samples":[],"math_unchanged":True,"enabled":enabled}
+    stats["resident_policy"]={"name":"hyperflow_1024_fp16_budget_v1","activation_budget_bytes":budget,"original_estimate_bytes":[],"selected_estimate_bytes":[],"memory_samples":[],"math_unchanged":True,"enabled":bool(budget)}
     policy=stats["resident_policy"]
     def memory_required(self,input_shape,cond_shapes={}):
         original=original_memory(input_shape,cond_shapes)

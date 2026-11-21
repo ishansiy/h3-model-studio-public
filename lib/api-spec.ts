@@ -1,6 +1,6 @@
 import { GENERATION_TYPES } from './generation-inputs';
 import { MODEL_CATALOG } from './model-catalog';
-import { HYPERFLOW_FAST_PRESET } from './hyperflow-config';
+import { HYPERFLOW_10S_PRESET,HYPERFLOW_FAST_PRESET } from './hyperflow-config';
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const json = (schema: unknown, example?: unknown) => ({
@@ -39,6 +39,10 @@ const fastVideoExample = {
   ...videoExample, requestId: '123e4567-e89b-42d3-a456-426614174003',
   width: HYPERFLOW_FAST_PRESET.width, height: HYPERFLOW_FAST_PRESET.height,
   duration: HYPERFLOW_FAST_PRESET.duration, steps: HYPERFLOW_FAST_PRESET.steps,
+};
+const longVideoExample = {
+  ...fastVideoExample, requestId: '123e4567-e89b-42d3-a456-426614174005',
+  duration: HYPERFLOW_10S_PRESET.duration,
 };
 const imageExample = {
   requestId: '123e4567-e89b-42d3-a456-426614174002', category: 'image', modelId: 'z-image-turbo',
@@ -155,6 +159,7 @@ export const API_SPEC = {
               examples: {
                 video: { summary: '生成视频', value: videoExample },
                 hyperflowFast: { summary: 'HyperFlow 1024×768 双 T4 快档', value: fastVideoExample },
+                hyperflow10s: { summary: 'HyperFlow 1024×768 双 T4 长片档（10 秒，实测约 1 小时 10 分钟）', value: longVideoExample },
                 image: { summary: '生成图片', value: imageExample },
                 keyframes: { summary: '用上传的首尾帧生成视频', value: {
                   ...videoExample, generationType: 'frames-to-video', firstFrame: 'a'.repeat(64), lastFrame: 'b'.repeat(64),
@@ -246,15 +251,21 @@ export const API_SPEC = {
           generationTypes: { type: 'array', items: { type: 'string', enum: Object.keys(GENERATION_TYPES) } },
           resolutions: { type: 'array', items: { type: 'object', properties: { value: { type: 'string' }, label: { type: 'string' } } } },
           defaults: { type: 'object', description: '该模型的默认生成参数。' },
-          fastPreset: {
-            type: 'object', required: ['width', 'height', 'duration', 'frames', 'steps', 'accelerator'],
-            description: 'HyperFlow 的双 T4 快档。提交尺寸、时长和步数即可选择，frames 是对齐后的输出帧数。',
-            properties: {
-              width: { type: 'integer' }, height: { type: 'integer' }, duration: { type: 'number' },
-              frames: { type: 'integer' }, steps: { type: 'integer' },
-              accelerator: { type: 'string', const: 'dual-t4' },
-            },
+          fastPreset: ref('HyperFlowDualT4Preset'),
+          dualT4Presets: {
+            type: 'array', items: ref('HyperFlowDualT4Preset'),
+            description: 'HyperFlow 已实测的双 T4 可选档。提交相应尺寸、时长和步数即可选择。10 秒档含环境和模型准备共约 1 小时 10 分钟。',
           },
+        },
+      },
+      HyperFlowDualT4Preset: {
+        type: 'object', required: ['width', 'height', 'duration', 'frames', 'steps', 'accelerator'],
+        properties: {
+          width: { type: 'integer' }, height: { type: 'integer' },
+          duration: { type: 'number', description: '请求秒数。' },
+          frames: { type: 'integer', description: '对齐后的输出帧数。' },
+          steps: { type: 'integer' }, accelerator: { type: 'string', const: 'dual-t4' },
+          measuredTotalSeconds: { type: 'integer', description: '实测 Notebook 总耗时（秒），包含环境准备和模型下载。' },
         },
       },
       AccountRequest: {
@@ -300,7 +311,7 @@ export const API_SPEC = {
           strength: { type: 'number', minimum: 0.2, maximum: 1, description: '重绘幅度。图生图默认 0.6，局部重绘默认 1。' },
           mode: { type: 'string', enum: ['quality', 'turbo'], description: 'H3 原版默认 quality。HyperFlow 只支持 quality，图片省略。' },
           duration: { type: 'number', minimum: 4, maximum: 15, description: '请求视频秒数。H3 为 4–15 秒，1024×768 上限 4.46 秒，HyperFlow 为 5–15 秒。图片省略。帧数对齐后实际时长可能略长。' },
-          steps: { type: 'integer', minimum: 1, maximum: 50, description: 'H3 原版 1–50（默认 20）、H3 Turbo 4 或 8（默认 8）、HyperFlow 4／6／8（默认 6）、Z-Image 固定 9。HyperFlow 的 1024×768、时长对齐为 124 帧时，4 步自动使用双 T4 快档，推荐请求 duration=5。' },
+          steps: { type: 'integer', minimum: 1, maximum: 50, description: 'H3 原版 1–50（默认 20）、H3 Turbo 4 或 8（默认 8）、HyperFlow 4／6／8（默认 6）、Z-Image 固定 9。HyperFlow 的 1024×768、4 步支持双 T4 快档（duration=5，124 帧）和长片档（duration=10，243 帧，实测含环境和模型准备约 1 小时 10 分钟）。' },
           runtimeProfile: { type: 'string', enum: ['standard', 'fp16', 'ck'], description: '默认 standard。fp16 仅 H3 原版，HyperFlow 和 Z-Image 仅 standard。' },
           seed: { oneOf: [{ type: 'string', pattern: '^[0-9]{1,20}$' }, { type: 'integer', minimum: 0, maximum: 9007199254740991 }], description: '省略时随机分配。范围 0–18446744073709551615，超过 JavaScript 安全整数时使用十进制字符串。' },
         },

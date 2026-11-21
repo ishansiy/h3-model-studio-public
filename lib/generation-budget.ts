@@ -1,4 +1,5 @@
 import {defaultGenerationType} from './generation-inputs';
+import {HYPERFLOW_10S_GENERATION_SECONDS,HYPERFLOW_10S_PRESET,hyperFlowDualT4Preset} from './hyperflow-config';
 import { generationSteps, type GenerationParams } from './model-catalog';
 import { frameCount, generationMode } from './parameters';
 
@@ -56,6 +57,8 @@ export function createGenerationBudget(history: TimingRow[]) {
       run * Math.max(1, (target.width * target.height) / (work.width * work.height)) *
       Math.max(1, target.frames / work.frames) * Math.max(1, target.steps / work.steps))) : fallback;
     const setup = cold ? Math.max(300, ...samples.map(s => s.setup)) : 0;
-    return Math.ceil((run + setup) * 1.25 + 120);
+    const long=hyperFlowDualT4Preset(p)===HYPERFLOW_10S_PRESET;
+    const measured=long?(cold?HYPERFLOW_10S_PRESET.measuredTotalSeconds:HYPERFLOW_10S_GENERATION_SECONDS):0;
+    return Math.ceil(Math.max(run+setup,measured)*1.25+120);
   };
 }

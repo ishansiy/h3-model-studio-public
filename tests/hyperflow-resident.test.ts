@@ -10,6 +10,15 @@ f=scope['memory_required'];assert f(None,[2*1024**3])==2*1024**3;assert f(None,[
 assert policy['original_estimate_bytes']==[2*1024**3,13*1024**3] and policy['selected_estimate_bytes']==[2*1024**3,6*1024**3]
 policy['enabled']=False;assert f(None,[13*1024**3])==13*1024**3
 assert 'torch.float16' not in sys.stdin.read()
+# 同一模型在 5 秒、10 秒和普通任务之间切换预算，无需重新加载。
+m=types.SimpleNamespace(forward=lambda *a:None,_studio_hf_mixed_stats={})
+p=types.SimpleNamespace(model=types.SimpleNamespace(diffusion_model=m,memory_required=lambda *_:13*1024**3))
+ctx={'_hf_resident_audit_original':lambda self,p,nonce:p,'_hf_resident_budget':lambda nonce:nonce*1024**3,'_hf_types':types}
+exec(compile(ast.Module(body=[audit],type_ignores=[]),'resident-audit','exec'),ctx)
+check=ctx['_hf_resident_audit']
+for budget,expected in [(6,6),(11,11),(6,6),(0,13)]:
+ check(None,p,budget)
+ assert p.model.memory_required([1])==expected*1024**3
 `],{input:HYPERFLOW_RESIDENT_NODE,encoding:'utf8'});assert.equal(p.status,0,p.stderr);
 assert.throws(()=>enableHyperFlowResident({cells:[]}),/锚点/);
 assert.ok(!HYPERFLOW_RESIDENT_NODE.includes('silu('));assert.ok(!HYPERFLOW_RESIDENT_NODE.includes('sdpa_kernel'));
@@ -17,7 +26,7 @@ console.log('通过：显存估算封顶保留较小估算、记录原值与峰�
 
 import {buildHyperFlowNotebook} from '../lib/hyperflow';
 import {validateHyperFlow} from '../lib/hyperflow-config';
-for(const [width,height,steps,duration] of [[1024,768,4,5],[1024,768,6,5]] as const){
+for(const [width,height,steps,duration] of [[1024,768,4,5],[1024,768,6,5],[1024,768,4,10]] as const){
  const p=validateHyperFlow({prompt:'海边',width,height,steps,duration,seed:20260803});
  const n=buildHyperFlowNotebook(p,'https://studio.test/api/worker/session','a'.repeat(64),{safeMixed:true,resident:true});
  assert.ok(n.includes('hyperflow_active_job.json')&&n.includes('hyperflow_1024_fp16_budget_v1'));
@@ -47,8 +56,11 @@ with tempfile.TemporaryDirectory() as d:
   fn=next(x for x in ast.parse(source).body if isinstance(x,ast.FunctionDef) and x.name==name);scope={'_HFPath':lambda _:path,'_hf_json':json}
   exec(compile(ast.Module(body=[fn],type_ignores=[]),'guard','exec'),scope);f=scope[name]
   assert not f('job')
-  for width,height,frames,steps,enabled in [(1024,768,124,4,True),(1024,768,124,6,True),(608,352,124,4,False),(1024,768,141,4,False),(1024,768,141,6,False),(1024,768,124,8,False)]:
-   path.write_text(json.dumps({'jobId':'job','width':width,'height':height,'frames':frames,'steps':steps}));assert bool(f('prefix-job'))==enabled;assert not f('different-nonce')
+  for width,height,frames,steps,budget in [(1024,768,124,4,6),(1024,768,124,6,6),(1024,768,243,4,11),(1024,768,243,6,0),(1024,768,243,8,0),(608,352,243,4,0),(1024,768,226,4,0),(1024,768,260,4,0),(608,352,124,4,0),(1024,768,141,4,0),(1024,768,124,8,0)]:
+   path.write_text(json.dumps({'jobId':'job','width':width,'height':height,'frames':frames,'steps':steps}))
+   actual=f('prefix-job')
+   assert actual==(budget*1024**3 if name=='_hf_resident_budget' else bool(budget))
+   assert not f('different-nonce')
   path.write_text('bad json');assert not f('job')
-`],{input:JSON.stringify([[HYPERFLOW_RESIDENT_NODE,'_hf_resident_enabled'],[HEAD_PARALLEL_INSTALL,'_hf_head_job_enabled']]),encoding:'utf8'});assert.equal(gate.status,0,gate.stderr);
+`],{input:JSON.stringify([[HYPERFLOW_RESIDENT_NODE,'_hf_resident_budget'],[HEAD_PARALLEL_INSTALL,'_hf_head_job_enabled']]),encoding:'utf8'});assert.equal(gate.status,0,gate.stderr);
 console.log('通过：同一会话按逐任务尺寸/帧数/步数/nonce开关；切回标准档或更长视频恢复原策略，配置缺失/损坏不启用。');

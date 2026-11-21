@@ -1,5 +1,5 @@
 import {generationImages,sessionImageInputsKey} from './generation-inputs';
-import {hyperFlowFastSessionKey,usesHyperFlowFastPreset} from './hyperflow-config';
+import {HYPERFLOW_10S_PRESET,hyperFlowDualT4Preset,hyperFlowFastSessionKey,hyperFlow10sSessionKey} from './hyperflow-config';
 import { generationInput, UUID } from './generation-api';
 import { cachedAccountResources, getAccountResources } from './account-resources';
 import { createGenerationBudget, type TimingRow } from './generation-budget';
@@ -23,6 +23,7 @@ type Candidate = QueueAccount & {
   session_warm: number | boolean;
   supports_image_inputs: string | null;
   supports_hyperflow_fast: string | null;
+  supports_hyperflow_10s: string | null;
   last_assigned_at: number | null;
   resources: string | null;
 };
@@ -35,24 +36,27 @@ async function accountCandidates(d: QueueStorage, owner: string) {
     EXISTS(SELECT 1 FROM jobs j WHERE j.owner=a.owner AND j.account_id=a.id AND j.session_id IS NULL
       AND j.status IN ('submitting','submission_unknown','queued','running')) AS legacy_busy,
     (SELECT j.created_at FROM jobs j WHERE j.owner=a.owner AND j.account_id=a.id ORDER BY j.created_at DESC LIMIT 1) AS last_assigned_at,
-    r.value AS resources, cap.value AS supports_image_inputs, fast.value AS supports_hyperflow_fast
+    r.value AS resources, cap.value AS supports_image_inputs, fast.value AS supports_hyperflow_fast, long_video.value AS supports_hyperflow_10s
     FROM accounts a
     LEFT JOIN gpu_sessions s ON s.owner=a.owner AND s.account_id=a.id AND s.status NOT IN ('completed','failed')
     LEFT JOIN settings r ON r.id=?||a.id
     LEFT JOIN settings cap ON cap.id=?||s.id
     LEFT JOIN settings fast ON fast.id=?||s.id
-    WHERE a.owner=? AND a.deleted_at IS NULL`).bind(resourcesCacheKey(owner,''), sessionImageInputsKey(''), hyperFlowFastSessionKey(''), owner).all<Candidate>();
+    LEFT JOIN settings long_video ON long_video.id=?||s.id
+    WHERE a.owner=? AND a.deleted_at IS NULL`).bind(resourcesCacheKey(owner,''), sessionImageInputsKey(''), hyperFlowFastSessionKey(''), hyperFlow10sSessionKey(''), owner).all<Candidate>();
 
   return results;
 }
 
 function isCompatible(row: Candidate, params: GenerationParams, now: number) {
+  const preset=hyperFlowDualT4Preset(params);
+  const dualT4Capability=preset===HYPERFLOW_10S_PRESET?row.supports_hyperflow_10s:row.supports_hyperflow_fast;
   return !row.legacy_busy && (!row.session_id ||
     (['active','queued','submitting'].includes(row.session_status ?? '') &&
     row.stop_requested_at === null && Number(row.expires_at) - now >= 600_000 &&
     row.session_model === params.modelId && row.session_profile === (params.runtimeProfile || 'standard') &&
     Number(row.pending) < 20 && (!generationImages(params).length || row.supports_image_inputs === '1') &&
-    (!usesHyperFlowFastPreset(params) || row.supports_hyperflow_fast === '1')));
+    (!preset || dualT4Capability === '1')));
 }
 
 export async function refreshSchedulingResources(owner: string, input: unknown) {

@@ -1,5 +1,5 @@
 import {generationImages,sessionImageInputsKey} from './generation-inputs';
-import {HYPERFLOW,hyperFlowFastSessionKey,usesHyperFlowFastPreset} from './hyperflow-config';
+import {HYPERFLOW,HYPERFLOW_10S_ACTIVATION_GIB,HYPERFLOW_10S_PRESET,hyperFlowDualT4Preset,hyperFlowFastSessionKey,hyperFlow10sSessionKey} from './hyperflow-config';
 import {validateGenerationParams as validateParams,generationSteps,jobModel,modelById} from './model-catalog';
 import {samplingSteps,frameCount} from './parameters';
 import {controlHash,createControlToken} from './job-control';
@@ -12,6 +12,7 @@ export const getSession=(d:QueueStorage,id:string)=>d.prepare('SELECT * FROM gpu
 export const sessionView=(s:GpuSession)=>({id:s.id,accountId:s.account_id,category:s.category||'video',modelId:jobModel(s),status:s.status,profile:s.profile,kernelRef:s.kernel_ref,version:s.version,createdAt:s.created_at,heartbeatAt:s.heartbeat_at,idleSince:s.idle_since,idleTimeoutSeconds:SESSION_IDLE_MS/1000,stopRequestedAt:s.stop_requested_at,error:s.last_error});
 export async function enqueue(d:QueueStorage,owner:string,a:{id:string;username:string;name:string},id:string,input:unknown,now=Date.now()){
  const params=validateParams(input),profile=params.runtimeProfile||'standard';const modelId=params.modelId,category=params.category;
+ const dualT4Preset=hyperFlowDualT4Preset(params);
  if(!['standard','ck','fp16'].includes(profile))throw new QueueError('请选择原精度、混合精度或注意力加速计算方案。');
  const existing=await d.prepare('SELECT * FROM jobs WHERE owner=? AND id=?').bind(owner,id).first<any>();if(existing)return {row:existing,session:existing.session_id?await getSession(d,existing.session_id):null,launch:null};
  const makeToken=createControlToken(),sid=crypto.randomUUID();let launch:{token:string;params:typeof params}|null=null;
@@ -20,7 +21,7 @@ export async function enqueue(d:QueueStorage,owner:string,a:{id:string;username:
  if(!s)throw new QueueError('该账户还有旧版任务，请等远端结束后再创建连续会话。',409);
  if(s.id===sid){
   launch={token:makeToken,params};
-  if(modelId===HYPERFLOW.id)await d.prepare('INSERT INTO settings(id,value) VALUES(?,?),(?,?)').bind(sessionImageInputsKey(s.id),'1',hyperFlowFastSessionKey(s.id),'1').run();
+  if(modelId===HYPERFLOW.id)await d.prepare('INSERT INTO settings(id,value) VALUES(?,?),(?,?),(?,?)').bind(sessionImageInputsKey(s.id),'1',hyperFlowFastSessionKey(s.id),'1',hyperFlow10sSessionKey(s.id),'1').run();
   else await d.prepare('INSERT INTO settings(id,value) VALUES(?,?)').bind(sessionImageInputsKey(s.id),'1').run();
  }
  if(generationImages(params).length&&!launch&&!await d.prepare("SELECT id FROM settings WHERE id=? AND value='1'").bind(sessionImageInputsKey(s.id)).first()){
@@ -29,7 +30,8 @@ export async function enqueue(d:QueueStorage,owner:string,a:{id:string;username:
  if(s.stop_requested_at||!['submitting','submission_unknown','queued','active'].includes(s.status))throw new QueueError('GPU会话正在退出，请确认结束后再提交。',409);
  if(s.expires_at-now<600_000)throw new QueueError('GPU会话接近最长时限，请结束后重新开启。',409);
  if(jobModel(s)!==modelId)throw new QueueError(`该账户当前会话运行${modelById(jobModel(s))?.name||jobModel(s)}，请等会话结束或先结束会话，再切换模型。`,409);
- if(!launch&&usesHyperFlowFastPreset(params)&&!await d.prepare("SELECT id FROM settings WHERE id=? AND value='1'").bind(hyperFlowFastSessionKey(s.id)).first()){
+ const capability=dualT4Preset===HYPERFLOW_10S_PRESET?hyperFlow10sSessionKey(s.id):hyperFlowFastSessionKey(s.id);
+ if(!launch&&dualT4Preset&&!await d.prepare("SELECT id FROM settings WHERE id=? AND value='1'").bind(capability).first()){
   throw new QueueError('当前 GPU 会话早于双 T4 快档，等会话正常结束后再提交，或使用空闲计算账户。',409);
  }
  if(s.profile!==profile)throw new QueueError(`当前GPU会话使用${s.profile==='ck'?'注意力加速':s.profile==='fp16'?'混合精度加速':'原精度计算'}。请沿用此方案，或结束会话后再切换。`,409);
@@ -80,12 +82,15 @@ export async function finishQueueJob(d:D1Database,s:GpuSession,value:any,hasArti
   }else{
   if(!m||m.runtime_profile!==s.profile||!c||c.width!==p.width||c.height!==p.height||c.steps!==samplingSteps(p)||String(c.seed)!==String(p.seed)||c.frames!==frameCount(p.duration)||!v?.full_decode_passed||v.frames!==c.frames||v.width!==p.width||v.height!==p.height||v.fps!==24||v.audio_channels!==2)throw new QueueError('成片参数或完整解码证明不匹配。',409);
   if(row.model_id==='hyperflow-h3-flash'){const h=m.hyperflow_proof;if(m.model_id!==HYPERFLOW.id||m.model_repo!==HYPERFLOW.repo||m.model_revision!==HYPERFLOW.revision||m.nodes_commit!==HYPERFLOW.nodesCommit||m.gguf_commit!==HYPERFLOW.ggufCommit||m.comfyui_commit!==HYPERFLOW.comfyCommit||!h||h.model_id!==HYPERFLOW.id||h.executed!==true||h.two_time!==true||h.quantization!==HYPERFLOW.quantization||!Number.isInteger(h.forward_calls)||h.forward_calls<c.steps||typeof h.nonce!=='string'||!h.nonce.includes(row.id)||c.sampler!=='euler'||c.cfg!==1)throw new QueueError('HyperFlow模型或实际采样证明不匹配。',409);}else if(m.hyperflow_proof)throw new QueueError('H3原版不能使用HyperFlow执行器。',409);
-  if(usesHyperFlowFastPreset(p)&&await d.prepare("SELECT id FROM settings WHERE id=? AND value='1'").bind(hyperFlowFastSessionKey(s.id)).first()){
+  const dualT4Preset=hyperFlowDualT4Preset(p), long=dualT4Preset===HYPERFLOW_10S_PRESET;
+  const capability=long?hyperFlow10sSessionKey(s.id):hyperFlowFastSessionKey(s.id);
+  if(dualT4Preset&&await d.prepare("SELECT id FROM settings WHERE id=? AND value='1'").bind(capability).first()){
    const proof=m.hyperflow_precision_proof, head=proof?.head_parallel;
    if(head?.enabled!==true||head.backend!=='dual_t4_full_attention_heads_v1'||!Number.isInteger(head.calls)||head.calls<1
     ||!Array.isArray(head.devices)||head.devices.length!==2||head.devices[0]!=='cuda:0'||head.devices[1]!=='cuda:1'
     ||head.full_key_value_sequence!==true||head.sparse!==false||head.quantized_attention!==false
-    ||proof.resident_policy?.enabled!==true||!Array.isArray(m.devices)||m.devices.length!==2||!m.devices.every((name:unknown)=>typeof name==='string'&&name.includes('T4'))){
+    ||proof.resident_policy?.enabled!==true||(long&&proof.resident_policy.activation_budget_bytes!==HYPERFLOW_10S_ACTIVATION_GIB*1024**3)
+    ||!Array.isArray(m.devices)||m.devices.length!==2||!m.devices.every((name:unknown)=>typeof name==='string'&&name.includes('T4'))){
     throw new QueueError('缺少本次双 T4 快档的实际执行证明。',409);
    }
   }

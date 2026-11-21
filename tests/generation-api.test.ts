@@ -40,6 +40,8 @@ try{
  const flash=(await models.json() as {models:any[]}).models.find(m=>m.id==='hyperflow-h3-flash');
  assert.equal(flash.defaults.steps,6);
  assert.deepEqual(flash.fastPreset,{width:1024,height:768,duration:5,frames:124,steps:4,accelerator:'dual-t4'});
+ assert.deepEqual(flash.dualT4Presets,[flash.fastPreset,{...flash.fastPreset,duration:10,frames:243,measuredTotalSeconds:4222}]);
+ assert.equal(generationInput({...input,width:1024,height:768,duration:10}).steps,6);
  assert.equal((await run('jobs','POST',input,reader)).status,403);
  assert.equal((await run('jobs/'+id+'/control')).status,404);
  assert.equal((await run('jobs','DELETE')).status,405);
@@ -140,6 +142,18 @@ try{
  assert.equal((await run('jobs','POST',{...fastExample,requestId:fastExampleId,accountId:aid})).status,202);
  assert.equal(JSON.parse((await job('owner',fastExampleId))!.params).steps,4);
  await cancelQueuedJob(d,'owner',fastExampleId);
+ const long=samples.hyperflow10s;
+ assert.match(long.summary,/1 小时 10 分钟/);
+ const longParams=generationInput(long.value);
+ assert.equal(longParams.modelId,"hyperflow-h3-flash");
+ assert.equal(longParams.duration,10);
+ assert.equal(longParams.steps,4);
+ const longResponse=await run('jobs','POST',{...long.value,accountId:aid});
+ assert.equal(longResponse.status,202);
+ const longJob=await job('owner',long.value.requestId);
+ assert.equal(JSON.parse(longJob!.params).duration,10);
+ assert.equal(longJob!.total_steps,4);
+ await cancelQueuedJob(d,'owner',long.value.requestId);
  assert.equal(generationInput(samples.image.value).category,'image');
  assert.equal(generationInput(samples.keyframes.value).generationType,'frames-to-video');
  assert.equal(generationInput(samples.editImage.value).generationType,'inpaint');

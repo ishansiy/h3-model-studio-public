@@ -59,7 +59,7 @@ def _hf_head_job_enabled(nonce):
     try:
         config=_hf_json.loads(_HFPath("/kaggle/working/hyperflow_active_job.json").read_text())
         return ${HYPERFLOW_DUAL_T4_JOB_CONDITION}
-    except (OSError,ValueError,TypeError):return False
+    except (OSError,ValueError,TypeError,AttributeError):return False
 _hf_head_audit_original=StudioHyperFlowAudit.audit
 
 def _hf_head_audit(self,model,nonce):
